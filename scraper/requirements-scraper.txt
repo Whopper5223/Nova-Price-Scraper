@@ -1,0 +1,7 @@
+# Scraper-specific dependencies — isolated from main requirements.txt
+# Install with: pip install -r scraper/requirements-scraper.txt
+# Then run:     playwright install chromium
+
+playwright>=1.44.0
+playwright-stealth>=0.0.1
+google-genai>=1.0.0

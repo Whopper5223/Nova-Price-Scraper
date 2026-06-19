@@ -1,0 +1,18 @@
+{
+  "_comment": "CSS selectors for Instacart. Automatically updated by selector_healer.py when they break.",
+  "_last_validated": null,
+  "address_input": "input[data-testid='search-bar-input'], input[placeholder*='Enter your address'], input[aria-label*='address'], input[name='address']",
+  "address_suggestion": "[data-testid='suggestion-item']:first-child, [data-testid='address-suggestion']:first-child, ul[role='listbox'] li:first-child",
+  "confirm_address_button": "button[data-testid='confirm-address-button'], button:has-text('Confirm'), button:has-text('Set address'), button:has-text('Start shopping')",
+  "store_card": "li > div.e-1wjx523 > div.e-eimyo4 > a.e-3k432h",
+  "store_name": "div.e-uwjwui",
+  "product_grid": "[data-testid='product-grid'], [class*='ProductGrid'], [class*='product-grid'], [class*='ProductList']",
+  "product_card": "div[data-item-card=\"true\"]",
+  "product_name": "div.e-1916dlq",
+  "product_price": ".e-gx2pr0",
+  "product_unit": ".e-cauxk8",
+  "load_more_button": "button[data-testid='load-more'], button:has-text('Load more'), button:has-text('Show more'), [class*='load-more']",
+  "department_nav": "[data-testid='department-link'], [class*='DepartmentNav'], nav a[href*='/store/']",
+  "age_verify_button": "button:has-text('Yes, continue'), button:has-text('I am 21'), button[data-testid='age-verify-confirm']",
+  "modal_close": "button[aria-label='Close'], button[data-testid='modal-close'], [class*='CloseButton']"
+}
