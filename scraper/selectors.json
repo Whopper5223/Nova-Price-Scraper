@@ -14,5 +14,8 @@
   "load_more_button": "button[data-testid='load-more'], button:has-text('Load more'), button:has-text('Show more'), [class*='load-more']",
   "department_nav": "[data-testid='department-link'], [class*='DepartmentNav'], nav a[href*='/store/']",
   "age_verify_button": "button:has-text('Yes, continue'), button:has-text('I am 21'), button[data-testid='age-verify-confirm']",
-  "modal_close": "button[aria-label='Close'], button[data-testid='modal-close'], [class*='CloseButton']"
+  "modal_close": "button[aria-label='Close'], button[data-testid='modal-close'], [class*='CloseButton']",
+  "search_input": "input[data-testid='search-bar-input'], input[placeholder*='Search'], input[aria-label*='search' i]",
+  "search_results_card": "div[data-item-card=\"true\"]",
+  "store_search_result": "a[href*='/storefront']"
 }

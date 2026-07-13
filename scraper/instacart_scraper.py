@@ -1,45 +1,44 @@
 """
 instacart_scraper.py
 
-Playwright-based scraper for Instacart.
+Full-catalog Instacart scraper.
 - Sets a hardcoded Lawrence, MA delivery address so Instacart shows local stores
-- Scrapes available stores and their product prices
+- Scrapes available stores and their product prices by department
 - Automatically invokes selector_healer.py when a selector stops working
-- Saves results to prices_output.json (no Supabase, no existing DB touched)
+- Saves results to prices_output.json incrementally (per store)
+
+Shared browser/selector/parsing logic lives in scraper/core.py.
 """
 
-import asyncio
 import json
 import random
-import re
-import time
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional
 
-from playwright.async_api import async_playwright, Page, BrowserContext, TimeoutError as PWTimeoutError
+from playwright.async_api import Page, TimeoutError as PWTimeoutError
 
-try:
-    from playwright_stealth import Stealth as _PlaywrightStealth
-    STEALTH_AVAILABLE = True
-except ImportError:
-    STEALTH_AVAILABLE = False
-    print("[scraper] Warning: playwright-stealth not installed. Bot detection risk is higher.")
-
-from scraper.selector_healer import heal_selector
+from scraper.core import (
+    launch_browser,
+    _load_selectors,
+    _human_delay,
+    _dismiss_modals,
+    _scroll_to_load_more,
+    _try_select,
+    _probe_card_selectors,
+    _parse_price,
+    _get_store_list,
+    get_card_name,
+    get_card_price,
+    SCRAPER_DIR,
+    SELECTORS_PATH,
+    SESSION_PATH,
+    INSTACART_URL,
+    STEALTH_AVAILABLE,
+)
 
 # ---------------------------------------------------------------------------
-# Paths
+# Config
 # ---------------------------------------------------------------------------
-SCRAPER_DIR = Path(__file__).parent
-SELECTORS_PATH = SCRAPER_DIR / "selectors.json"
-OUTPUT_PATH = SCRAPER_DIR / "prices_output.json"
-SESSION_PATH = SCRAPER_DIR / "session.json"
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-INSTACART_URL = "https://www.instacart.com"
+OUTPUT_PATH = SCRAPER_DIR / "prices_output.json"  # overridden by --output flag at runtime
 
 # Hardcoded Lawrence, MA address
 DELIVERY_ADDRESS = "50 Island St, Lawrence, MA 01840"
@@ -47,125 +46,19 @@ DELIVERY_ADDRESS = "50 Island St, Lawrence, MA 01840"
 # How many products to scrape per store (keep low to avoid bans during testing)
 MAX_PRODUCTS_PER_STORE = 40
 
+# Per-category mode: cap applied per department instead of total across the store
+PER_CATEGORY_MODE = False
+MAX_PRODUCTS_PER_CATEGORY = 150
+
 # Max stores to scrape in one run
 MAX_STORES = 5
 
 # Departments to visit per store — keeps scope tight
 TARGET_DEPARTMENTS = ["produce", "dairy", "meat-seafood", "bakery", "frozen"]
 
-# Delay ranges in seconds — randomized to mimic human behavior
-DELAY_SHORT = (1.0, 2.5)
-DELAY_MEDIUM = (2.5, 5.0)
-DELAY_LONG = (5.0, 9.0)
-
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _load_selectors() -> dict:
-    with open(SELECTORS_PATH, "r") as f:
-        return json.load(f)
-
-
-async def _human_delay(short: bool = False, long: bool = False) -> None:
-    """Sleep for a randomized human-like duration."""
-    if short:
-        lo, hi = DELAY_SHORT
-    elif long:
-        lo, hi = DELAY_LONG
-    else:
-        lo, hi = DELAY_MEDIUM
-    await asyncio.sleep(random.uniform(lo, hi))
-
-
-async def _dismiss_modals(page: Page, selectors: dict) -> None:
-    """Dismiss any overlays (age verify, location prompts, cookie banners)."""
-    close_sel = selectors.get("modal_close", "button[aria-label='Close']")
-    age_sel = selectors.get("age_verify_button", "button:has-text('Yes, continue')")
-
-    for sel in [age_sel, close_sel]:
-        try:
-            btn = page.locator(sel).first
-            if await btn.is_visible(timeout=2000):
-                await btn.click()
-                await _human_delay(short=True)
-        except Exception:
-            pass
-
-
-async def _try_select(page: Page, selector_key: str, selectors: dict, timeout: int = 8000):
-    """
-    Try to locate elements using the current selector for selector_key.
-    If nothing is found, invoke the healer to get a new selector and retry once.
-    Returns a Locator (may match zero elements — caller checks count).
-    """
-    selector = selectors[selector_key]
-    locator = page.locator(selector)
-
-    try:
-        await locator.first.wait_for(state="attached", timeout=timeout)
-        count = await locator.count()
-        if count > 0:
-            return locator
-    except PWTimeoutError:
-        pass
-
-    # Selector found nothing — attempt healing
-    print(f"[scraper] Selector '{selector_key}' matched nothing. Attempting self-heal...")
-    html = await page.content()
-    new_selector = heal_selector(selector_key, html)
-
-    if new_selector:
-        selectors[selector_key] = new_selector  # update in-memory copy too
-        locator = page.locator(new_selector)
-        try:
-            await locator.first.wait_for(state="attached", timeout=timeout)
-        except PWTimeoutError:
-            pass
-
-    return locator
-
-
-async def _probe_card_selectors(page: Page, card_locator, selectors: dict, keys: list[str]) -> None:
-    """
-    Before looping over cards, check each sub-selector against the first card.
-    If any find nothing, trigger healing so the full loop uses a working selector.
-    Page HTML is fetched lazily — only if at least one selector needs healing.
-    """
-    if await card_locator.count() == 0:
-        return
-
-    first_card = card_locator.first
-    html = None
-
-    for key in keys:
-        try:
-            el = first_card.locator(selectors[key])
-            if await el.count() == 0:
-                print(f"[scraper] Sub-selector '{key}' matched nothing in card — attempting heal...")
-                if html is None:
-                    html = await page.content()
-                new_sel = heal_selector(key, html)
-                if new_sel:
-                    selectors[key] = new_sel
-        except Exception:
-            pass
-
-
-def _parse_price(raw: str) -> Optional[float]:
-    """Extract a float price from strings like '$3.99', '3.99', '$1,299.00'."""
-    if not raw:
-        return None
-    cleaned = re.sub(r"[^\d.]", "", raw.replace(",", ""))
-    try:
-        return float(cleaned)
-    except ValueError:
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Core scraping logic
+# Address setup
 # ---------------------------------------------------------------------------
 
 async def _reveal_address_input(page: Page) -> None:
@@ -254,50 +147,9 @@ async def _set_delivery_address(page: Page, selectors: dict) -> bool:
         return False
 
 
-async def _get_store_list(page: Page, selectors: dict) -> list[dict]:
-    """
-    Return a list of stores available for the set delivery address.
-    Each entry: {"name": str, "url": str}
-    """
-    stores = []
-
-    # Navigate to the store picker
-    await page.goto(f"{INSTACART_URL}/store", wait_until="domcontentloaded")
-    await _human_delay(long=True)
-    await _dismiss_modals(page, selectors)
-
-    # Save page HTML for debugging selector issues
-    debug_path = SCRAPER_DIR / "_debug_store.html"
-    debug_path.write_text(await page.content())
-    print(f"[scraper] Store page HTML saved to {debug_path} (current URL: {page.url})")
-
-    store_locator = await _try_select(page, "store_card", selectors, timeout=15000)
-    count = await store_locator.count()
-    print(f"[scraper] Found {count} store cards.")
-
-    await _probe_card_selectors(page, store_locator, selectors, ["store_name"])
-
-    for i in range(min(count, MAX_STORES)):
-        card = store_locator.nth(i)
-        try:
-            name_locator = card.locator(selectors["store_name"])
-            name = (await name_locator.first.inner_text(timeout=3000)).strip()
-
-            # Get the href of the store card or its first anchor
-            href = await card.get_attribute("href")
-            if not href:
-                anchor = card.locator("a").first
-                href = await anchor.get_attribute("href")
-
-            if name and href:
-                full_url = href if href.startswith("http") else f"{INSTACART_URL}{href}"
-                stores.append({"name": name, "url": full_url})
-                print(f"[scraper]   Store: {name}")
-        except Exception as e:
-            print(f"[scraper]   Could not parse store card {i}: {e}")
-
-    return stores
-
+# ---------------------------------------------------------------------------
+# Product scraping
+# ---------------------------------------------------------------------------
 
 async def _scrape_store_products(page: Page, store: dict, selectors: dict) -> list[dict]:
     """
@@ -340,61 +192,58 @@ async def _scrape_store_products(page: Page, store: dict, selectors: dict) -> li
     department_name = "general"
 
     for dept_url in pages_to_scrape:
-        if len(products) >= MAX_PRODUCTS_PER_STORE:
+        if not PER_CATEGORY_MODE and len(products) >= MAX_PRODUCTS_PER_STORE:
             break
 
         if dept_url != store_url:
-            # Derive department name from URL
-            for dep in TARGET_DEPARTMENTS:
-                if dep in dept_url:
-                    department_name = dep
-                    break
+            # Derive department name from URL slug, fall back to raw slug
+            slug = dept_url.rstrip("/").split("/")[-1]
+            department_name = next((dep for dep in TARGET_DEPARTMENTS if dep in dept_url), slug)
             print(f"[scraper]   Department: {department_name} ({dept_url})")
             await page.goto(dept_url, wait_until="domcontentloaded")
             await _human_delay(long=True)
             await _dismiss_modals(page, selectors)
 
-        # Scrape product cards on this page
+        # Scrape product cards on this page — scroll to lazy-load more before counting
         product_locator = await _try_select(page, "product_card", selectors, timeout=10000)
+        limit = MAX_PRODUCTS_PER_CATEGORY if PER_CATEGORY_MODE else MAX_PRODUCTS_PER_STORE
+        await _scroll_to_load_more(page, selectors["product_card"], target=limit)
         prod_count = await product_locator.count()
         print(f"[scraper]   Found {prod_count} product cards.")
 
         await _probe_card_selectors(page, product_locator, selectors, ["product_name", "product_price", "product_unit"])
 
+        dept_collected = 0  # per-category counter (only used in PER_CATEGORY_MODE)
+
         for i in range(prod_count):
-            if len(products) >= MAX_PRODUCTS_PER_STORE:
-                break
+            if PER_CATEGORY_MODE:
+                if dept_collected >= MAX_PRODUCTS_PER_CATEGORY:
+                    break
+            else:
+                if len(products) >= MAX_PRODUCTS_PER_STORE:
+                    break
 
             card = product_locator.nth(i)
             try:
-                name_el = card.locator(selectors["product_name"])
-                price_el = card.locator(selectors["product_price"])
+                name = await get_card_name(card, selectors)
+                price = await get_card_price(card, selectors)
+
                 unit_el = card.locator(selectors["product_unit"])
+                unit_raw = (await unit_el.first.inner_text()).strip() if await unit_el.count() > 0 else ""
 
-                name_raw = ""
-                price_raw = ""
-                unit_raw = ""
-
-                if await name_el.count() > 0:
-                    name_raw = (await name_el.first.inner_text()).strip()
-                if await price_el.count() > 0:
-                    price_raw = (await price_el.first.inner_text()).strip()
-                if await unit_el.count() > 0:
-                    unit_raw = (await unit_el.first.inner_text()).strip()
-
-                parsed_price = _parse_price(price_raw)
-
-                if name_raw and parsed_price is not None:
+                if name and price is not None:
                     products.append({
-                        "name": name_raw,
-                        "price": parsed_price,
-                        "price_raw": price_raw,
+                        "name": name,
+                        "price": price,
                         "unit": unit_raw or None,
                         "department": department_name,
                     })
+                    dept_collected += 1
             except Exception as e:
                 print(f"[scraper]   Could not parse product card {i}: {e}")
 
+        if PER_CATEGORY_MODE:
+            print(f"[scraper]   Collected {dept_collected} products from {department_name}.")
         await _human_delay()
 
     print(f"[scraper]   Collected {len(products)} products from {store['name']}.")
@@ -405,10 +254,10 @@ async def _scrape_store_products(page: Page, store: dict, selectors: dict) -> li
 # Public entry point
 # ---------------------------------------------------------------------------
 
-async def run_scraper(verbose: bool = True) -> dict:
+async def run_scraper(verbose: bool = True, store_filter: list[str] | None = None) -> dict:
     """
     Run the full scrape: set address → get stores → scrape products → return result dict.
-    Saves result to prices_output.json automatically.
+    Saves result to OUTPUT_PATH incrementally after each store (crash-safe).
     """
     result = {
         "scraped_at": datetime.now(timezone.utc).isoformat(),
@@ -419,79 +268,52 @@ async def run_scraper(verbose: bool = True) -> dict:
 
     selectors = _load_selectors()
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(
-            headless=False,  # headful mode reduces bot detection
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-            ],
-        )
+    def _save_partial():
+        OUTPUT_PATH.write_text(json.dumps(result, indent=2, ensure_ascii=False))
 
-        context_kwargs: dict = {
-            "viewport": {"width": 1366, "height": 768},
-            "user_agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "locale": "en-US",
-            "timezone_id": "America/New_York",
-        }
-        if SESSION_PATH.exists():
-            context_kwargs["storage_state"] = str(SESSION_PATH)
-            if verbose:
-                print("[scraper] Loaded saved session (skipping address setup).")
+    async with launch_browser(verbose=verbose) as (browser, context, page):
+        if not SESSION_PATH.exists():
+            address_ok = await _set_delivery_address(page, selectors)
+            if not address_ok:
+                result["errors"].append("Failed to set delivery address — prices may be inaccurate.")
 
-        context: BrowserContext = await browser.new_context(**context_kwargs)
+        stores = await _get_store_list(page, selectors, verbose=verbose)
+        if not stores:
+            result["errors"].append("No stores found for the given address.")
+            print("[scraper] No stores found. Exiting.")
+            return result
 
-        page: Page = await context.new_page()
-
-        # Apply stealth patches if available
-        if STEALTH_AVAILABLE:
-            await _PlaywrightStealth().apply_stealth_async(page)
-            if verbose:
-                print("[scraper] Stealth mode active.")
-
-        try:
-            if not SESSION_PATH.exists():
-                address_ok = await _set_delivery_address(page, selectors)
-                if not address_ok:
-                    result["errors"].append("Failed to set delivery address — prices may be inaccurate.")
-
-            stores = await _get_store_list(page, selectors)
+        if store_filter:
+            stores = [s for s in stores if any(f.lower() in s["name"].lower() for f in store_filter)]
             if not stores:
-                result["errors"].append("No stores found for the given address.")
-                print("[scraper] No stores found. Exiting.")
+                print(f"[scraper] No stores matched filter: {store_filter}")
                 return result
 
-            for store in stores:
-                try:
-                    products = await _scrape_store_products(page, store, selectors)
-                    result["stores"].append({
-                        "name": store["name"],
-                        "url": store["url"],
-                        "product_count": len(products),
-                        "products": products,
-                    })
-                except Exception as e:
-                    msg = f"Error scraping {store['name']}: {e}"
-                    print(f"[scraper] {msg}")
-                    result["errors"].append(msg)
-                    result["stores"].append({
-                        "name": store["name"],
-                        "url": store["url"],
-                        "product_count": 0,
-                        "products": [],
-                        "error": str(e),
-                    })
+        stores = stores[:MAX_STORES]
 
-        finally:
-            await browser.close()
+        for store in stores:
+            try:
+                products = await _scrape_store_products(page, store, selectors)
+                result["stores"].append({
+                    "name": store["name"],
+                    "url": store["url"],
+                    "product_count": len(products),
+                    "products": products,
+                })
+            except Exception as e:
+                msg = f"Error scraping {store['name']}: {e}"
+                print(f"[scraper] {msg}")
+                result["errors"].append(msg)
+                result["stores"].append({
+                    "name": store["name"],
+                    "url": store["url"],
+                    "product_count": 0,
+                    "products": [],
+                    "error": str(e),
+                })
+            _save_partial()  # crash-safe: keep what we have so far
 
-    # Save output
-    OUTPUT_PATH.write_text(json.dumps(result, indent=2, ensure_ascii=False))
+    _save_partial()
     total_products = sum(s["product_count"] for s in result["stores"])
     print(f"\n[scraper] Done. {len(result['stores'])} stores, {total_products} products total.")
     print(f"[scraper] Output saved to: {OUTPUT_PATH}")

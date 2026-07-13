@@ -1,0 +1,67 @@
+{
+  ".claude/settings.json": {
+    "mtime": 1783904352.310079,
+    "ast_hash": "e4b0f42ccd457d425575e3522382f7fc",
+    "semantic_hash": "e4b0f42ccd457d425575e3522382f7fc"
+  },
+  "scraper/__init__.py": {
+    "mtime": 1781900222.1544511,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "scraper/core.py": {
+    "mtime": 1783297208.3446305,
+    "ast_hash": "6a942b0f5319a6b3fda9739203a93c55",
+    "semantic_hash": "6a942b0f5319a6b3fda9739203a93c55"
+  },
+  "scraper/instacart_scraper.py": {
+    "mtime": 1783134935.0505726,
+    "ast_hash": "1ddbd3e9a909b4670933bc8158c01666",
+    "semantic_hash": "1ddbd3e9a909b4670933bc8158c01666"
+  },
+  "scraper/product_search.py": {
+    "mtime": 1783180538.1322017,
+    "ast_hash": "fcaaa910686913ed132bf6872b2c9040",
+    "semantic_hash": "fcaaa910686913ed132bf6872b2c9040"
+  },
+  "scraper/recipe_scraper.py": {
+    "mtime": 1783297162.14831,
+    "ast_hash": "c0f3102ed49daef92a6883434a556cc1",
+    "semantic_hash": "c0f3102ed49daef92a6883434a556cc1"
+  },
+  "scraper/run_scraper.py": {
+    "mtime": 1783131472.553672,
+    "ast_hash": "e4e1a4b28ad90a5559f76667c6d8a5de",
+    "semantic_hash": "e4e1a4b28ad90a5559f76667c6d8a5de"
+  },
+  "scraper/selector_healer.py": {
+    "mtime": 1783134700.422202,
+    "ast_hash": "2d9a00a9a1c2dad573b107b234d46526",
+    "semantic_hash": "2d9a00a9a1c2dad573b107b234d46526"
+  },
+  "scraper/selectors.json": {
+    "mtime": 1783134687.6132712,
+    "ast_hash": "386ddc10c56d987a894e580fb4a1e0ac",
+    "semantic_hash": "386ddc10c56d987a894e580fb4a1e0ac"
+  },
+  "CLAUDE.md": {
+    "mtime": 1783904352.3098145,
+    "ast_hash": "82efb97a359f5c7290bf2513d14686be",
+    "semantic_hash": "82efb97a359f5c7290bf2513d14686be"
+  },
+  "README.md": {
+    "mtime": 1783297437.073381,
+    "ast_hash": "b9f966ed90a5e7a198732c8d9d54c612",
+    "semantic_hash": "b9f966ed90a5e7a198732c8d9d54c612"
+  },
+  "scraper/requirements-scraper.txt": {
+    "mtime": 1782220121.349927,
+    "ast_hash": "3fd5bb58c94e2965ce6a84ac1203b10a",
+    "semantic_hash": "3fd5bb58c94e2965ce6a84ac1203b10a"
+  },
+  "scraper/scrape_report.md": {
+    "mtime": 1783131261.4010954,
+    "ast_hash": "43d342fea72fd27264dee36359eb2c5f",
+    "semantic_hash": "43d342fea72fd27264dee36359eb2c5f"
+  }
+}

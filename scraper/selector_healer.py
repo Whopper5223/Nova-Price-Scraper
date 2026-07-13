@@ -34,6 +34,9 @@ HEALABLE_KEYS = {
     "department_nav",
     "age_verify_button",
     "modal_close",
+    "search_input",
+    "search_results_card",
+    "store_search_result",
 }
 
 # Human-readable descriptions for each selector — sent to Gemini so it understands intent
@@ -52,6 +55,9 @@ SELECTOR_DESCRIPTIONS = {
     "department_nav": "navigation links to grocery departments (produce, dairy, etc.)",
     "age_verify_button": "the button to confirm age on an age verification modal",
     "modal_close": "a generic modal close/dismiss button",
+    "search_input": "the search input field used to search for products within a store",
+    "search_results_card": "an individual product card in search results — same component as a product card in a department page",
+    "store_search_result": "a link to a grocery STORE's storefront page appearing in search results (href contains '/store/<name>/storefront') — NOT a product link",
 }
 
 # Hint strings to locate the relevant section in the HTML for each selector key.
@@ -71,6 +77,9 @@ _SELECTOR_HINTS = {
     "department_nav":         ["department-link", "DepartmentNav", "/departments/"],
     "age_verify_button":      ["age-verify", "I am 21", "Yes, continue"],
     "modal_close":            ["modal-close", "aria-label=\"Close\"", "CloseButton"],
+    "search_input":           ["search-bar-input", "placeholder=\"Search\"", "aria-label=\"search\""],
+    "search_results_card":    ["item-card", "data-item-card", "ItemCard"],
+    "store_search_result":    ["/storefront", "retailer", "store-card"],
 }
 
 # Max characters to send to Gemini per heal request (~950K leaves headroom under 1M token limit)

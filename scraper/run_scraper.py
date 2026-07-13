@@ -72,22 +72,51 @@ def _print_summary(result: dict) -> None:
     print("=" * 60)
 
 
+def _parse_store_filter(stores_arg: str | None) -> list[str] | None:
+    if not stores_arg:
+        return None
+    return [s.strip() for s in stores_arg.split(",")]
+
+
+def cmd_list_stores(_args: argparse.Namespace) -> None:
+    """Print stores from the last scrape run, or a hint to run the scraper first."""
+    output_path = Path(__file__).parent / "prices_output.json"
+    if not output_path.exists():
+        print("No saved stores found. Run the scraper first:")
+        print("  python -m scraper.run_scraper")
+        return
+    data = json.loads(output_path.read_text())
+    stores = data.get("stores", [])
+    if not stores:
+        print("prices_output.json exists but has no stores.")
+        return
+    print("Available stores (from last scrape):")
+    for i, s in enumerate(stores, 1):
+        print(f"  {i}. {s['name']}")
+
+
 def cmd_scrape(args: argparse.Namespace) -> None:
     """Run the full scraper."""
     warnings = _check_env()
     for w in warnings:
         print(f"[warning] {w}")
 
-    # Apply CLI overrides to the scraper module constants
+    store_filter = _parse_store_filter(getattr(args, "stores", None))
+
     if args.max_stores is not None:
         _scraper_module.MAX_STORES = args.max_stores
-    if args.max_products is not None:
-        _scraper_module.MAX_PRODUCTS_PER_STORE = args.max_products
+    if args.per_category:
+        _scraper_module.PER_CATEGORY_MODE = True
+        if args.max_products is not None:
+            _scraper_module.MAX_PRODUCTS_PER_CATEGORY = args.max_products
+    else:
+        if args.max_products is not None:
+            _scraper_module.MAX_PRODUCTS_PER_STORE = args.max_products
+
+    if args.output:
+        _scraper_module.OUTPUT_PATH = Path(args.output).expanduser()
     if args.headless:
         print("[run] Running in headless mode (higher bot detection risk).")
-
-    # Patch headless flag into the scraper
-    original_run = _scraper_module.run_scraper
 
     if args.headless:
         import playwright.async_api as _pw_api
@@ -99,7 +128,7 @@ def cmd_scrape(args: argparse.Namespace) -> None:
 
         _pw_api.BrowserType.launch = _headless_launch
 
-    result = asyncio.run(_scraper_module.run_scraper(verbose=not args.quiet))
+    result = asyncio.run(_scraper_module.run_scraper(verbose=not args.quiet, store_filter=store_filter))
     _print_summary(result)
 
 
@@ -238,6 +267,16 @@ Examples:
         help="Open browser to log in manually and save the session. Run this once before scraping.",
     )
     parser.add_argument(
+        "--list-stores",
+        action="store_true",
+        help="Show all stores from the last scrape run and exit.",
+    )
+    parser.add_argument(
+        "--stores",
+        metavar="NAMES",
+        help='Comma-separated store names to scrape. Partial match, case-insensitive. e.g. "ALDI,Target"',
+    )
+    parser.add_argument(
         "--headless",
         action="store_true",
         help="Run browser in headless mode (no visible window). Higher bot detection risk.",
@@ -254,7 +293,18 @@ Examples:
         type=int,
         default=None,
         metavar="N",
-        help=f"Max products per store (default: {_scraper_module.MAX_PRODUCTS_PER_STORE})",
+        help=f"Max products per store (default: {_scraper_module.MAX_PRODUCTS_PER_STORE}) or per category when --per-category is set (default: {_scraper_module.MAX_PRODUCTS_PER_CATEGORY})",
+    )
+    parser.add_argument(
+        "--per-category",
+        action="store_true",
+        help=f"Apply the product limit per department/category instead of per store total (default limit: {_scraper_module.MAX_PRODUCTS_PER_CATEGORY} per category).",
+    )
+    parser.add_argument(
+        "--output",
+        metavar="PATH",
+        default=None,
+        help="Where to save the JSON output (default: scraper/prices_output.json). e.g. ~/Desktop/prices.json",
     )
     parser.add_argument(
         "--quiet",
@@ -296,6 +346,8 @@ Examples:
 
     if args.login:
         cmd_login(args)
+    elif args.list_stores:
+        cmd_list_stores(args)
     elif args.show_output:
         cmd_show_output(args)
     elif args.heal_only:

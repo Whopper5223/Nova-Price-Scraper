@@ -4,7 +4,12 @@ scraper/session.json
 
 # Generated output
 scraper/prices_output.json
+scraper/recipe_output.json
+scraper/product_search_output.json
 scraper/_debug_*.html
+scraper/_debug_search_*.html
+scraper/scrape_report.md
+scraper/scrape_run.log
 
 # Python
 __pycache__/
