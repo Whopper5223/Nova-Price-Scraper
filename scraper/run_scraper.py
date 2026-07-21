@@ -103,15 +103,18 @@ def cmd_scrape(args: argparse.Namespace) -> None:
 
     store_filter = _parse_store_filter(getattr(args, "stores", None))
 
+    if args.address:
+        _scraper_module.DELIVERY_ADDRESS = args.address
     if args.max_stores is not None:
         _scraper_module.MAX_STORES = args.max_stores
-    if args.per_category:
-        _scraper_module.PER_CATEGORY_MODE = True
-        if args.max_products is not None:
-            _scraper_module.MAX_PRODUCTS_PER_CATEGORY = args.max_products
-    else:
-        if args.max_products is not None:
-            _scraper_module.MAX_PRODUCTS_PER_STORE = args.max_products
+    if args.max_products is not None:
+        _scraper_module.MAX_PRODUCTS_PER_CATEGORY = args.max_products
+    if args.max_per_store is not None:
+        _scraper_module.MAX_PRODUCTS_PER_STORE = args.max_per_store
+    if args.departments:
+        _scraper_module.TARGET_DEPARTMENTS = [
+            d.strip().lower() for d in args.departments.split(",") if d.strip()
+        ]
 
     if args.output:
         _scraper_module.OUTPUT_PATH = Path(args.output).expanduser()
@@ -253,9 +256,12 @@ def main() -> None:
         epilog="""
 Examples:
   python -m scraper.run_scraper --login                 Log in once and save session
-  python -m scraper.run_scraper                         Run with defaults
+  python -m scraper.run_scraper                         All departments, 150 products each
+  python -m scraper.run_scraper --departments "produce,dairy"   Only these departments
+  python -m scraper.run_scraper --max-stores 0          Every store found
+  python -m scraper.run_scraper --max-products 0        No per-department cap
+  python -m scraper.run_scraper --address "1 Main St, Boston, MA 02108"  Different address
   python -m scraper.run_scraper --headless              Run without browser window
-  python -m scraper.run_scraper --max-stores 2          Only scrape 2 stores
   python -m scraper.run_scraper --heal-only product_price  Manually heal a selector
   python -m scraper.run_scraper --show-output --products   Show last scraped data
         """,
@@ -282,23 +288,37 @@ Examples:
         help="Run browser in headless mode (no visible window). Higher bot detection risk.",
     )
     parser.add_argument(
+        "--address",
+        metavar="ADDR",
+        default=None,
+        help="Delivery address for this run. Defaults to the DELIVERY_ADDRESS env var (set it in .env).",
+    )
+    parser.add_argument(
+        "--departments",
+        metavar="NAMES",
+        default=None,
+        help='Comma-separated departments to scrape, e.g. "produce,dairy". Default: every department the store has.',
+    )
+    parser.add_argument(
         "--max-stores",
         type=int,
         default=None,
         metavar="N",
-        help=f"Max number of stores to scrape (default: {_scraper_module.MAX_STORES})",
+        help=f"Max number of stores to scrape; 0 = all stores found (default: {_scraper_module.MAX_STORES})",
     )
     parser.add_argument(
         "--max-products",
         type=int,
         default=None,
         metavar="N",
-        help=f"Max products per store (default: {_scraper_module.MAX_PRODUCTS_PER_STORE}) or per category when --per-category is set (default: {_scraper_module.MAX_PRODUCTS_PER_CATEGORY})",
+        help=f"Max products per department; 0 = unlimited (default: {_scraper_module.MAX_PRODUCTS_PER_CATEGORY})",
     )
     parser.add_argument(
-        "--per-category",
-        action="store_true",
-        help=f"Apply the product limit per department/category instead of per store total (default limit: {_scraper_module.MAX_PRODUCTS_PER_CATEGORY} per category).",
+        "--max-per-store",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Total product cap across a whole store; 0 = unlimited (default: 0). The per-department cap still applies.",
     )
     parser.add_argument(
         "--output",

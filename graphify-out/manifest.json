@@ -15,24 +15,24 @@
     "semantic_hash": "6a942b0f5319a6b3fda9739203a93c55"
   },
   "scraper/instacart_scraper.py": {
-    "mtime": 1783134935.0505726,
-    "ast_hash": "1ddbd3e9a909b4670933bc8158c01666",
-    "semantic_hash": "1ddbd3e9a909b4670933bc8158c01666"
+    "mtime": 1783915777.28718,
+    "ast_hash": "1fe8f7d45263d953629cac4d2efc49d7",
+    "semantic_hash": "1fe8f7d45263d953629cac4d2efc49d7"
   },
   "scraper/product_search.py": {
-    "mtime": 1783180538.1322017,
-    "ast_hash": "fcaaa910686913ed132bf6872b2c9040",
-    "semantic_hash": "fcaaa910686913ed132bf6872b2c9040"
+    "mtime": 1783916207.6830444,
+    "ast_hash": "6831543ed2ac984ee3a78424ed3c03ce",
+    "semantic_hash": "6831543ed2ac984ee3a78424ed3c03ce"
   },
   "scraper/recipe_scraper.py": {
-    "mtime": 1783297162.14831,
-    "ast_hash": "c0f3102ed49daef92a6883434a556cc1",
-    "semantic_hash": "c0f3102ed49daef92a6883434a556cc1"
+    "mtime": 1783916174.8907704,
+    "ast_hash": "73b2899ee6b67811f64c4f385d7e00b2",
+    "semantic_hash": "73b2899ee6b67811f64c4f385d7e00b2"
   },
   "scraper/run_scraper.py": {
-    "mtime": 1783131472.553672,
-    "ast_hash": "e4e1a4b28ad90a5559f76667c6d8a5de",
-    "semantic_hash": "e4e1a4b28ad90a5559f76667c6d8a5de"
+    "mtime": 1783915877.7088256,
+    "ast_hash": "27465c2d3a26859d4514f17ada3c4981",
+    "semantic_hash": "27465c2d3a26859d4514f17ada3c4981"
   },
   "scraper/selector_healer.py": {
     "mtime": 1783134700.422202,
@@ -50,9 +50,9 @@
     "semantic_hash": "82efb97a359f5c7290bf2513d14686be"
   },
   "README.md": {
-    "mtime": 1783297437.073381,
-    "ast_hash": "b9f966ed90a5e7a198732c8d9d54c612",
-    "semantic_hash": "b9f966ed90a5e7a198732c8d9d54c612"
+    "mtime": 1783916362.1869004,
+    "ast_hash": "4365979ceeb7e971ecb49c6eeaca30c5",
+    "semantic_hash": "4365979ceeb7e971ecb49c6eeaca30c5"
   },
   "scraper/requirements-scraper.txt": {
     "mtime": 1782220121.349927,

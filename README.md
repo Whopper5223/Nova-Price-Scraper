@@ -26,8 +26,9 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r scraper/requirements-scraper.txt
 playwright install chromium
 
-# 4. Create .env in the repo root (optional — only for self-healing)
-echo "GEMINI_API_KEY=your_actual_key_here" > .env
+# 4. Create .env in the repo root
+echo "GEMINI_API_KEY=your_actual_key_here" > .env       # optional — only for self-healing
+echo "DELIVERY_ADDRESS=1 Main St, Boston, MA 02108" >> .env   # your delivery address
 
 # 5. Log in once (opens a browser, saves session.json)
 python -m scraper.run_scraper --login
@@ -41,11 +42,13 @@ python -m scraper.run_scraper --max-stores 2 --max-products 10   # small test ru
 
 ```bash
 python -m scraper.run_scraper --help                      # usage
-python -m scraper.run_scraper                             # full scrape (5 stores x 40 products)
-python -m scraper.run_scraper --max-stores 2             # limit stores
-python -m scraper.run_scraper --max-products 10          # limit products per store
+python -m scraper.run_scraper                             # 5 stores, every department, 150 products per department
+python -m scraper.run_scraper --max-stores 2             # limit stores (0 = every store found)
+python -m scraper.run_scraper --max-products 50          # cap per department (0 = unlimited)
+python -m scraper.run_scraper --max-per-store 200        # total cap across a store (0 = unlimited, default)
+python -m scraper.run_scraper --departments "produce,dairy"       # only these departments
 python -m scraper.run_scraper --stores "ALDI,Wegmans"    # only these stores
-python -m scraper.run_scraper --per-category --max-products 150   # 150 per department instead of per store
+python -m scraper.run_scraper --address "1 Main St, Boston, MA 02108"  # one-off address override
 python -m scraper.run_scraper --headless                 # no visible window (more bot risk)
 python -m scraper.run_scraper --quiet                    # less output
 python -m scraper.run_scraper --output ~/Desktop/prices.json      # custom save location
@@ -86,6 +89,11 @@ Results saved to `scraper/product_search_output.json` by default. Only products 
 # Find the cheapest store to buy all ingredients for a recipe
 python -m scraper.recipe_scraper --url "https://www.allrecipes.com/recipe/10813/"
 
+# Multi-recipe pages (roundups, "10 best..." lists): pick by number or name.
+# Without --recipe the first recipe is used and the full list is printed.
+python -m scraper.recipe_scraper --url "..." --recipe 2
+python -m scraper.recipe_scraper --url "..." --recipe "carbonara"
+
 # Specific stores (same 3-stage store lookup as product_search)
 python -m scraper.recipe_scraper --url "..." --stores "ALDI,Hannaford"
 
@@ -117,7 +125,7 @@ A real browser window opens. Complete **all** of these, then return to the termi
 1. Solve any CAPTCHA
 2. Log into Instacart fully (email + password)
 3. Wait until you see the homepage (not a login page)
-4. Set delivery address to `50 Island St, Lawrence, MA 01840`
+4. Set your delivery address (the same one as `DELIVERY_ADDRESS` in `.env`)
 5. Confirm you can see a list of stores
 
 This saves your session to `scraper/session.json` so future runs skip login.
@@ -131,7 +139,7 @@ This saves your session to `scraper/session.json` so future runs skip login.
 ### Project layout
 ```
 Nova-Price-Scraper/
-├── .env                          # YOU create this (gitignored) — GEMINI_API_KEY
+├── .env                          # YOU create this (gitignored) — GEMINI_API_KEY, DELIVERY_ADDRESS
 ├── .gitignore
 ├── README.md
 └── scraper/

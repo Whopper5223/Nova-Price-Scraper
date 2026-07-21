@@ -78,7 +78,7 @@ async def run_product_search(
                 else:
                     result["unavailable_stores"].append(name)
         else:
-            targets = store_list[:max_stores]
+            targets = store_list[:max_stores] if max_stores > 0 else store_list
 
         if not targets:
             result["errors"].append("No stores available to search.")
@@ -186,7 +186,7 @@ Examples:
     parser.add_argument("--results", type=int, default=DEFAULT_RESULTS, metavar="N",
                         help=f"How many matching products per store feed the price range (default: {DEFAULT_RESULTS}).")
     parser.add_argument("--max-stores", type=int, default=DEFAULT_MAX_STORES, metavar="N",
-                        help=f"Max stores when --stores is not given (default: {DEFAULT_MAX_STORES}).")
+                        help=f"Max stores when --stores is not given; 0 = all (default: {DEFAULT_MAX_STORES}).")
     parser.add_argument("--output", metavar="PATH", default=None,
                         help=f"Where to save the JSON output (default: {OUTPUT_PATH}).")
     parser.add_argument("--quiet", action="store_true", help="Suppress verbose output.")

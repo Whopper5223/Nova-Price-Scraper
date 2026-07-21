@@ -56,41 +56,55 @@ _REQUEST_HEADERS = {
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Fetch ingredients from recipe URL
+# Step 1: Fetch recipes from the URL
+#
+# A page may hold several recipes (roundups, "10 best..." lists). Every parser
+# returns a list of {"name": str | None, "ingredients": list[str]} dicts; the
+# caller picks one via _select_recipe.
 # ---------------------------------------------------------------------------
 
-def fetch_ingredients_sync(url: str) -> list[str]:
-    """
-    Fetch ingredients via requests only (sync, safe to call outside an event loop).
-    Returns empty list if the page is JS-rendered — caller should use fetch_ingredients_async instead.
-    """
-    html = _fetch_html_requests(url)
-    if html:
-        return _parse_jsonld(html) or _parse_microdata(html) or _parse_css_heuristic(html)
+def _parse_recipes(html: str) -> list[dict]:
+    """All recipes from a page: JSON-LD first, then single-recipe fallbacks."""
+    recipes = _parse_jsonld_recipes(html)
+    if recipes:
+        return recipes
+    ingredients = _parse_microdata(html) or _parse_css_heuristic(html)
+    if ingredients:
+        # Microdata/CSS can't tell recipes apart — treat the page as one recipe
+        return [{"name": None, "ingredients": ingredients}]
     return []
 
 
-async def fetch_ingredients_async(url: str, page: Page) -> list[str]:
+def fetch_recipes_sync(url: str) -> list[dict]:
     """
-    Fetch ingredients using a Playwright page that's already open (avoids nested asyncio.run).
+    Fetch recipes via requests only (sync, safe to call outside an event loop).
+    Returns empty list if the page is JS-rendered — caller should use fetch_recipes_async instead.
+    """
+    html = _fetch_html_requests(url)
+    return _parse_recipes(html) if html else []
+
+
+async def fetch_recipes_async(url: str, page: Page) -> list[dict]:
+    """
+    Fetch recipes using a Playwright page that's already open (avoids nested asyncio.run).
     Tries requests first, then navigates the existing page if needed, then Gemini.
     """
     # Try requests first (fast, no browser nav needed)
     html = _fetch_html_requests(url)
     if html:
-        ingredients = _parse_jsonld(html) or _parse_microdata(html) or _parse_css_heuristic(html)
-        if ingredients:
-            return ingredients
+        recipes = _parse_recipes(html)
+        if recipes:
+            return recipes
 
     # JS-rendered — use the existing browser page
-    print("[recipe] No ingredients via requests — fetching with browser...")
+    print("[recipe] No recipes via requests — fetching with browser...")
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=20000)
         await page.wait_for_timeout(2000)
         html = await page.content()
-        ingredients = _parse_jsonld(html) or _parse_microdata(html) or _parse_css_heuristic(html)
-        if ingredients:
-            return ingredients
+        recipes = _parse_recipes(html)
+        if recipes:
+            return recipes
     except Exception as e:
         print(f"[recipe] Browser fetch of recipe URL failed: {e}")
         html = None
@@ -106,7 +120,46 @@ async def fetch_ingredients_async(url: str, page: Page) -> list[str]:
         return []
 
     print("[recipe] Asking Gemini to extract ingredients from page HTML...")
-    return _gemini_extract_ingredients(html[:100_000], api_key)
+    ingredients = _gemini_extract_ingredients(html[:100_000], api_key)
+    return [{"name": None, "ingredients": ingredients}] if ingredients else []
+
+
+def _select_recipe(recipes: list[dict], choice: str | None) -> dict | None:
+    """
+    Pick one recipe from what the page offered. With one recipe there is nothing
+    to choose. With several: --recipe N picks by number, --recipe "name" by name
+    match, and no flag defaults to the first with a printed notice.
+    """
+    if not recipes:
+        return None
+    if len(recipes) == 1:
+        return recipes[0]
+
+    names = [r["name"] or f"Recipe {i}" for i, r in enumerate(recipes, 1)]
+    print(f"[recipe] This page contains {len(recipes)} recipes:")
+    for i, name in enumerate(names, 1):
+        print(f"  {i}. {name}  ({len(recipes[i - 1]['ingredients'])} ingredients)")
+
+    if choice:
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(recipes):
+                print(f"[recipe] Using recipe {idx + 1}: {names[idx]}")
+                return recipes[idx]
+            print(f"[recipe] --recipe {choice} is out of range (1-{len(recipes)}).")
+            return None
+        matches = [i for i, r in enumerate(recipes) if r["name"] and choice.lower() in r["name"].lower()]
+        if not matches:
+            print(f"[recipe] No recipe name matches '{choice}'.")
+            return None
+        if len(matches) > 1:
+            print(f"[recipe] '{choice}' matches {len(matches)} recipes — using the first match.")
+        print(f"[recipe] Using recipe: {names[matches[0]]}")
+        return recipes[matches[0]]
+
+    print(f"[recipe] No --recipe given — using the first: {names[0]}")
+    print('[recipe] Pick a different one with --recipe N or --recipe "name".')
+    return recipes[0]
 
 
 def _fetch_html_requests(url: str) -> str | None:
@@ -119,18 +172,22 @@ def _fetch_html_requests(url: str) -> str | None:
         return None
 
 
-def _parse_jsonld(html: str) -> list[str]:
-    """Parse JSON-LD blocks from raw HTML and return recipeIngredient if found."""
+def _parse_jsonld_recipes(html: str) -> list[dict]:
+    """Collect every Recipe object across all JSON-LD blocks on the page."""
     soup = BeautifulSoup(html, "html.parser")
+    recipes = []
+    seen = set()
     for script in soup.find_all("script", type="application/ld+json"):
         try:
             data = json.loads(script.string or "")
-            result = _extract_recipe_ingredients(data)
-            if result:
-                return result
         except Exception:
             continue
-    return []
+        for r in _extract_recipes(data):
+            key = (r["name"], tuple(r["ingredients"]))
+            if key not in seen:
+                seen.add(key)
+                recipes.append(r)
+    return recipes
 
 
 def _parse_microdata(html: str) -> list[str]:
@@ -152,25 +209,33 @@ def _parse_css_heuristic(html: str) -> list[str]:
     return results
 
 
-def _extract_recipe_ingredients(data) -> list[str]:
-    """Recursively search JSON-LD for a Recipe type and return recipeIngredient."""
+def _extract_recipes(data) -> list[dict]:
+    """
+    Recursively collect every Recipe object in a JSON-LD tree.
+    Handles @graph containers, nested lists, and @type given as a list
+    (e.g. ["Recipe", "NewsArticle"]).
+    """
+    recipes = []
     if isinstance(data, dict):
-        if data.get("@type") == "Recipe":
-            return data.get("recipeIngredient", [])
-        if "@graph" in data:
-            for item in data["@graph"]:
-                result = _extract_recipe_ingredients(item)
-                if result:
-                    return result
-    if isinstance(data, list):
+        rtype = data.get("@type")
+        types = rtype if isinstance(rtype, list) else [rtype]
+        if "Recipe" in types and data.get("recipeIngredient"):
+            recipes.append({
+                "name": (data.get("name") or "").strip() or None,
+                "ingredients": [str(s) for s in data.get("recipeIngredient", [])],
+            })
+        else:
+            for value in data.values():
+                if isinstance(value, (dict, list)):
+                    recipes.extend(_extract_recipes(value))
+    elif isinstance(data, list):
         for item in data:
-            result = _extract_recipe_ingredients(item)
-            if result:
-                return result
-    return []
+            recipes.extend(_extract_recipes(item))
+    return recipes
 
 
-_GEMINI_MODELS = ["gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.5-flash"]
+# gemini-2.0-flash was shut down June 2026 — keep this list to live models only
+_GEMINI_MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash"]
 
 
 def _gemini_generate(api_key: str, prompt: str) -> str | None:
@@ -308,14 +373,18 @@ async def run_recipe_scraper(
     store_filter: list[str] | None = None,
     n_results: int = 5,
     skip: list[str] | None = None,
+    recipe_choice: str | None = None,
 ) -> dict:
     """
-    Full pipeline: fetch ingredients → normalize → Instacart search per store → compare.
+    Full pipeline: fetch recipes → pick one → normalize → Instacart search per store → compare.
+    recipe_choice picks a recipe on multi-recipe pages (number or name substring).
     Saves results to scraper/recipe_output.json.
     """
     result = {
         "recipe_url": recipe_url,
         "scraped_at": datetime.now(timezone.utc).isoformat(),
+        "recipe_name": None,
+        "recipes_on_page": [],
         "raw_ingredients": [],
         "ingredients": [],
         "stores": [],
@@ -326,13 +395,24 @@ async def run_recipe_scraper(
     selectors = _load_selectors()
 
     async with launch_browser(verbose=verbose) as (browser, context, page):
-        # Fetch ingredients inside the async context so JS-rendered pages can use this browser
-        raw_ingredients = await fetch_ingredients_async(recipe_url, page)
-        if not raw_ingredients:
-            print("[recipe] No ingredients found. Exiting.")
-            result["errors"].append("No ingredients found at the given URL.")
+        # Fetch recipes inside the async context so JS-rendered pages can use this browser
+        recipes = await fetch_recipes_async(recipe_url, page)
+        if not recipes:
+            print("[recipe] No recipes found. Exiting.")
+            result["errors"].append("No recipes found at the given URL.")
             return result
 
+        result["recipes_on_page"] = [r["name"] or "(unnamed)" for r in recipes]
+
+        recipe = _select_recipe(recipes, recipe_choice)
+        if recipe is None:
+            result["errors"].append(
+                f"Recipe selection failed — page has {len(recipes)} recipes; pass --recipe N or --recipe \"name\"."
+            )
+            return result
+
+        result["recipe_name"] = recipe["name"]
+        raw_ingredients = recipe["ingredients"]
         result["raw_ingredients"] = raw_ingredients
         print(f"[recipe] Found {len(raw_ingredients)} ingredients. Normalizing...")
         ingredients = normalize_ingredients(raw_ingredients)
@@ -378,7 +458,8 @@ async def run_recipe_scraper(
                 print("[recipe] No prior scrape found — discovering stores on Instacart...")
                 stores = await _get_store_list(page, selectors)
 
-        stores = stores[:max_stores]
+        if max_stores > 0:
+            stores = stores[:max_stores]
         if not stores:
             result["errors"].append("No stores found.")
             return result
@@ -452,7 +533,8 @@ def _print_comparison(result: dict) -> None:
     ing_w = max(max((len(i) for i in ingredients), default=10), len("Ingredient")) + 2
 
     print("\n" + "=" * 60)
-    print("PRICE COMPARISON")
+    title = result.get("recipe_name")
+    print(f"PRICE COMPARISON — {title}" if title else "PRICE COMPARISON")
     print("=" * 60)
 
     header = f"{'Ingredient':<{ing_w}}" + "".join(f"{n:<{col_w}}" for n in store_names)
@@ -506,15 +588,19 @@ def main() -> None:
 Examples:
   python -m scraper.recipe_scraper --list-stores
   python -m scraper.recipe_scraper --url "https://www.allrecipes.com/recipe/10813/"
+  python -m scraper.recipe_scraper --url "..." --recipe 2            # 2nd recipe on a multi-recipe page
+  python -m scraper.recipe_scraper --url "..." --recipe "carbonara"  # pick by name
   python -m scraper.recipe_scraper --url "..." --stores "ALDI,Target"
   python -m scraper.recipe_scraper --url "..." --max-stores 3
   python -m scraper.recipe_scraper --url "..." --quiet --raw
         """,
     )
     parser.add_argument("--url", metavar="URL", help="Recipe URL to scrape ingredients from.")
+    parser.add_argument("--recipe", metavar="N_OR_NAME", default=None,
+                        help="On pages with several recipes: pick by number (1-based) or name substring. Default: first recipe.")
     parser.add_argument("--list-stores", action="store_true", help="Show all available stores and exit.")
     parser.add_argument("--stores", metavar="NAMES", help='Comma-separated store names to search. Partial match, case-insensitive. e.g. "ALDI,Target"')
-    parser.add_argument("--max-stores", type=int, default=None, metavar="N", help=f"Max stores to search (default: {MAX_STORES}).")
+    parser.add_argument("--max-stores", type=int, default=None, metavar="N", help=f"Max stores to search; 0 = all (default: {MAX_STORES}).")
     parser.add_argument("--results", type=int, default=5, metavar="N", help="Matching products per ingredient that feed the price range (default: 5).")
     parser.add_argument("--skip", metavar="NAMES", help='Comma-separated ingredients to leave out, e.g. "water,salt". Partial match.')
     parser.add_argument("--quiet", action="store_true", help="Suppress verbose output.")
@@ -540,6 +626,7 @@ Examples:
         store_filter=store_filter,
         n_results=args.results,
         skip=skip,
+        recipe_choice=args.recipe,
     ))
 
     if args.raw:

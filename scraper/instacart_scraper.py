@@ -2,8 +2,9 @@
 instacart_scraper.py
 
 Full-catalog Instacart scraper.
-- Sets a hardcoded Lawrence, MA delivery address so Instacart shows local stores
-- Scrapes available stores and their product prices by department
+- Sets the delivery address (DELIVERY_ADDRESS env var / --address flag) so
+  Instacart shows local stores
+- Scrapes every department a store exposes (narrow with --departments)
 - Automatically invokes selector_healer.py when a selector stops working
 - Saves results to prices_output.json incrementally (per store)
 
@@ -11,7 +12,9 @@ Shared browser/selector/parsing logic lives in scraper/core.py.
 """
 
 import json
+import os
 import random
+import re
 from datetime import datetime, timezone
 
 from playwright.async_api import Page, TimeoutError as PWTimeoutError
@@ -40,21 +43,21 @@ from scraper.core import (
 # ---------------------------------------------------------------------------
 OUTPUT_PATH = SCRAPER_DIR / "prices_output.json"  # overridden by --output flag at runtime
 
-# Hardcoded Lawrence, MA address
-DELIVERY_ADDRESS = "50 Island St, Lawrence, MA 01840"
+# Delivery address: DELIVERY_ADDRESS env var (or .env) — override per run with --address
+DELIVERY_ADDRESS = os.environ.get("DELIVERY_ADDRESS", "50 Island St, Lawrence, MA 01840")
 
-# How many products to scrape per store (keep low to avoid bans during testing)
-MAX_PRODUCTS_PER_STORE = 40
-
-# Per-category mode: cap applied per department instead of total across the store
-PER_CATEGORY_MODE = False
+# Cap per department (0 = unlimited). Keeps one giant department from eating the run.
 MAX_PRODUCTS_PER_CATEGORY = 150
 
-# Max stores to scrape in one run
+# Total cap across a whole store (0 = unlimited; the per-category cap still applies)
+MAX_PRODUCTS_PER_STORE = 0
+
+# Max stores to scrape in one run (0 = every store found)
 MAX_STORES = 5
 
-# Departments to visit per store — keeps scope tight
-TARGET_DEPARTMENTS = ["produce", "dairy", "meat-seafood", "bakery", "frozen"]
+# Departments to visit per store. None = every department the store's nav exposes.
+# Narrow with --departments, e.g. ["produce", "dairy"].
+TARGET_DEPARTMENTS: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +173,7 @@ async def _scrape_store_products(page: Page, store: dict, selectors: dict) -> li
     debug_product_path.write_text(await page.content())
     print(f"[scraper]   Product page HTML saved to {debug_product_path}")
 
-    # Try to find department nav links
+    # Collect department nav links — all of them unless TARGET_DEPARTMENTS narrows the run
     dept_locator = await _try_select(page, "department_nav", selectors, timeout=8000)
     dept_count = await dept_locator.count()
     dept_urls = []
@@ -180,25 +183,35 @@ async def _scrape_store_products(page: Page, store: dict, selectors: dict) -> li
         try:
             href = await link.get_attribute("href")
             text = (await link.inner_text()).strip().lower()
-            if href and any(dep in text or dep in href for dep in TARGET_DEPARTMENTS):
-                full = href if href.startswith("http") else f"{INSTACART_URL}{href}"
-                if full not in dept_urls:
-                    dept_urls.append(full)
+            if not href:
+                continue
+            if TARGET_DEPARTMENTS and not any(dep in text or dep in href for dep in TARGET_DEPARTMENTS):
+                continue
+            full = href if href.startswith("http") else f"{INSTACART_URL}{href}"
+            if full not in dept_urls:
+                dept_urls.append(full)
         except Exception:
             pass
+
+    if dept_urls:
+        print(f"[scraper]   {len(dept_urls)} departments to scrape.")
 
     # If no department links found, scrape the store's main page directly
     pages_to_scrape = dept_urls if dept_urls else [store_url]
     department_name = "general"
+    seen_names: set[str] = set()  # same product often appears in several departments
+
+    def _store_cap_reached() -> bool:
+        return MAX_PRODUCTS_PER_STORE > 0 and len(products) >= MAX_PRODUCTS_PER_STORE
 
     for dept_url in pages_to_scrape:
-        if not PER_CATEGORY_MODE and len(products) >= MAX_PRODUCTS_PER_STORE:
+        if _store_cap_reached():
             break
 
         if dept_url != store_url:
-            # Derive department name from URL slug, fall back to raw slug
+            # Department name from the URL slug, minus any numeric ID prefix
             slug = dept_url.rstrip("/").split("/")[-1]
-            department_name = next((dep for dep in TARGET_DEPARTMENTS if dep in dept_url), slug)
+            department_name = re.sub(r"^\d+-", "", slug)
             print(f"[scraper]   Department: {department_name} ({dept_url})")
             await page.goto(dept_url, wait_until="domcontentloaded")
             await _human_delay(long=True)
@@ -206,22 +219,22 @@ async def _scrape_store_products(page: Page, store: dict, selectors: dict) -> li
 
         # Scrape product cards on this page — scroll to lazy-load more before counting
         product_locator = await _try_select(page, "product_card", selectors, timeout=10000)
-        limit = MAX_PRODUCTS_PER_CATEGORY if PER_CATEGORY_MODE else MAX_PRODUCTS_PER_STORE
+        limit = MAX_PRODUCTS_PER_CATEGORY if MAX_PRODUCTS_PER_CATEGORY > 0 else 10_000
+        if MAX_PRODUCTS_PER_STORE > 0:
+            limit = min(limit, MAX_PRODUCTS_PER_STORE - len(products))
         await _scroll_to_load_more(page, selectors["product_card"], target=limit)
         prod_count = await product_locator.count()
         print(f"[scraper]   Found {prod_count} product cards.")
 
         await _probe_card_selectors(page, product_locator, selectors, ["product_name", "product_price", "product_unit"])
 
-        dept_collected = 0  # per-category counter (only used in PER_CATEGORY_MODE)
+        dept_collected = 0
 
         for i in range(prod_count):
-            if PER_CATEGORY_MODE:
-                if dept_collected >= MAX_PRODUCTS_PER_CATEGORY:
-                    break
-            else:
-                if len(products) >= MAX_PRODUCTS_PER_STORE:
-                    break
+            if _store_cap_reached():
+                break
+            if MAX_PRODUCTS_PER_CATEGORY > 0 and dept_collected >= MAX_PRODUCTS_PER_CATEGORY:
+                break
 
             card = product_locator.nth(i)
             try:
@@ -232,6 +245,9 @@ async def _scrape_store_products(page: Page, store: dict, selectors: dict) -> li
                 unit_raw = (await unit_el.first.inner_text()).strip() if await unit_el.count() > 0 else ""
 
                 if name and price is not None:
+                    if name in seen_names:
+                        continue
+                    seen_names.add(name)
                     products.append({
                         "name": name,
                         "price": price,
@@ -242,8 +258,7 @@ async def _scrape_store_products(page: Page, store: dict, selectors: dict) -> li
             except Exception as e:
                 print(f"[scraper]   Could not parse product card {i}: {e}")
 
-        if PER_CATEGORY_MODE:
-            print(f"[scraper]   Collected {dept_collected} products from {department_name}.")
+        print(f"[scraper]   Collected {dept_collected} products from {department_name}.")
         await _human_delay()
 
     print(f"[scraper]   Collected {len(products)} products from {store['name']}.")
@@ -289,7 +304,8 @@ async def run_scraper(verbose: bool = True, store_filter: list[str] | None = Non
                 print(f"[scraper] No stores matched filter: {store_filter}")
                 return result
 
-        stores = stores[:MAX_STORES]
+        if MAX_STORES > 0:
+            stores = stores[:MAX_STORES]
 
         for store in stores:
             try:
