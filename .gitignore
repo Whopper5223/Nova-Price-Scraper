@@ -1,6 +1,8 @@
 # Secrets & session
 .env
 scraper/session.json
+scraper/session.json.bad
+scraper/browser_profile/
 
 # Generated output
 scraper/prices_output.json
@@ -17,6 +19,10 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+
+# graphify machine-local state — absolute paths that differ per machine
+graphify-out/.graphify_python
+graphify-out/.graphify_root
 
 # macOS
 .DS_Store

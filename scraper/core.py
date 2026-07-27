@@ -16,6 +16,7 @@ hooks Instacart exposes.
 
 import asyncio
 import json
+import os
 import random
 import re
 from contextlib import asynccontextmanager
@@ -64,6 +65,21 @@ CONTEXT_KWARGS = {
     "timezone_id": "America/New_York",
 }
 
+# Attach to a real Chrome you started yourself instead of launching one.
+# Instacart blocks logins in Playwright-launched browsers no matter how much stealth
+# is applied, but a Chrome the user launched and logged into by hand passes — so we
+# connect to that over the DevTools protocol and drive the session it already has.
+# Set CHROME_CDP_URL (or use --cdp) to enable; unset means launch normally.
+CHROME_CDP_URL = os.environ.get("CHROME_CDP_URL", "").strip()
+DEFAULT_CDP_URL = "http://localhost:9222"
+
+# Which Chromium build to launch. Playwright's bundled build (channel unset) is a
+# test binary that bot detection flags on sight; the "chromium" channel is a stable
+# Chromium release with a far more ordinary fingerprint. Set BROWSER_CHANNEL to
+# "chromium" (recommended), "chrome"/"msedge" to drive an installed browser, or
+# leave empty for the bundled build.
+BROWSER_CHANNEL = os.environ.get("BROWSER_CHANNEL", "chromium").strip()
+
 
 # ---------------------------------------------------------------------------
 # Browser lifecycle
@@ -72,11 +88,59 @@ CONTEXT_KWARGS = {
 @asynccontextmanager
 async def launch_browser(verbose: bool = True):
     """
-    Launch a headful stealth browser with the saved session (if any) and yield
-    (browser, context, page). Closes everything on exit.
+    Yield (browser, context, page) for scraping.
+
+    Two modes:
+      - CDP attach (CHROME_CDP_URL set): reuse a Chrome the user started and logged
+        into themselves. Nothing is launched and the browser is left open on exit,
+        because it's the user's window, not ours.
+      - Launch (default): start a stealth Chromium with the saved session.json.
     """
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=False, args=BROWSER_ARGS)
+        if CHROME_CDP_URL:
+            if verbose:
+                print(f"[scraper] Attaching to your Chrome at {CHROME_CDP_URL}...")
+            try:
+                browser = await pw.chromium.connect_over_cdp(CHROME_CDP_URL)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Could not attach to Chrome at {CHROME_CDP_URL}: {e}\n"
+                    "Start Chrome with remote debugging first:\n"
+                    '  chrome.exe --remote-debugging-port=9222 '
+                    '--user-data-dir="%LOCALAPPDATA%\\nova-chrome-profile"\n'
+                    "then log into Instacart in that window before re-running."
+                ) from e
+
+            # An attached Chrome already has a context (its normal profile) — reuse it
+            # so we inherit the cookies the user logged in with. Creating a new context
+            # here would start logged-out and defeat the whole point.
+            context = browser.contexts[0] if browser.contexts else await browser.new_context()
+            page = context.pages[0] if context.pages else await context.new_page()
+
+            if verbose:
+                print(f"[scraper] Attached. Using existing tab: {page.url}")
+
+            try:
+                yield browser, context, page
+            finally:
+                # Detach only — closing would kill the user's browser and their login.
+                await browser.close()
+            return
+
+        launch_kwargs: dict = {"headless": False, "args": BROWSER_ARGS}
+        if BROWSER_CHANNEL:
+            launch_kwargs["channel"] = BROWSER_CHANNEL
+        try:
+            browser = await pw.chromium.launch(**launch_kwargs)
+            if verbose and BROWSER_CHANNEL:
+                print(f"[scraper] Browser channel: {BROWSER_CHANNEL}")
+        except Exception as e:
+            # A channel that isn't installed shouldn't be fatal — the bundled build
+            # still works, it's just more detectable.
+            if not BROWSER_CHANNEL:
+                raise
+            print(f"[scraper] Channel '{BROWSER_CHANNEL}' unavailable ({e}); using bundled Chromium.")
+            browser = await pw.chromium.launch(headless=False, args=BROWSER_ARGS)
 
         ctx_kwargs = dict(CONTEXT_KWARGS)
         if SESSION_PATH.exists():

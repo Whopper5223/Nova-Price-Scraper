@@ -1,67 +1,87 @@
 {
   ".claude/settings.json": {
-    "mtime": 1783904352.310079,
-    "ast_hash": "e4b0f42ccd457d425575e3522382f7fc",
-    "semantic_hash": "e4b0f42ccd457d425575e3522382f7fc"
+    "mtime": 1785097969.5735066,
+    "ast_hash": "ed5143d775450ae8c1c91da2e99583e6",
+    "semantic_hash": "ed5143d775450ae8c1c91da2e99583e6"
   },
   "scraper/__init__.py": {
-    "mtime": 1781900222.1544511,
+    "mtime": 1785096580.3057683,
     "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
     "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
   },
   "scraper/core.py": {
-    "mtime": 1783297208.3446305,
-    "ast_hash": "6a942b0f5319a6b3fda9739203a93c55",
-    "semantic_hash": "6a942b0f5319a6b3fda9739203a93c55"
+    "mtime": 1785116203.0680287,
+    "ast_hash": "c74117dc189cac72b318881db7d407fd",
+    "semantic_hash": "c74117dc189cac72b318881db7d407fd"
   },
   "scraper/instacart_scraper.py": {
-    "mtime": 1783915777.28718,
-    "ast_hash": "1fe8f7d45263d953629cac4d2efc49d7",
-    "semantic_hash": "1fe8f7d45263d953629cac4d2efc49d7"
+    "mtime": 1785097969.5928576,
+    "ast_hash": "c4a29810e8475f37a629a7e5927b99a0",
+    "semantic_hash": "c4a29810e8475f37a629a7e5927b99a0"
   },
   "scraper/product_search.py": {
-    "mtime": 1783916207.6830444,
-    "ast_hash": "6831543ed2ac984ee3a78424ed3c03ce",
-    "semantic_hash": "6831543ed2ac984ee3a78424ed3c03ce"
+    "mtime": 1785097969.5928576,
+    "ast_hash": "0dea0bd5447b0f81b17235a3ce62c48c",
+    "semantic_hash": "0dea0bd5447b0f81b17235a3ce62c48c"
   },
   "scraper/recipe_scraper.py": {
-    "mtime": 1783916174.8907704,
-    "ast_hash": "73b2899ee6b67811f64c4f385d7e00b2",
-    "semantic_hash": "73b2899ee6b67811f64c4f385d7e00b2"
+    "mtime": 1785097969.5938675,
+    "ast_hash": "a0ff2c82e8a61f777ab4a0a4692607e6",
+    "semantic_hash": "a0ff2c82e8a61f777ab4a0a4692607e6"
   },
   "scraper/run_scraper.py": {
-    "mtime": 1783915877.7088256,
-    "ast_hash": "27465c2d3a26859d4514f17ada3c4981",
-    "semantic_hash": "27465c2d3a26859d4514f17ada3c4981"
+    "mtime": 1785116222.0035617,
+    "ast_hash": "5a6cbe249ea43786fa118bdaa7037a12",
+    "semantic_hash": "5a6cbe249ea43786fa118bdaa7037a12"
   },
   "scraper/selector_healer.py": {
-    "mtime": 1783134700.422202,
-    "ast_hash": "2d9a00a9a1c2dad573b107b234d46526",
-    "semantic_hash": "2d9a00a9a1c2dad573b107b234d46526"
+    "mtime": 1785097969.5953724,
+    "ast_hash": "aef709e09983b52b0bfcf6b822d8b536",
+    "semantic_hash": "aef709e09983b52b0bfcf6b822d8b536"
   },
   "scraper/selectors.json": {
-    "mtime": 1783134687.6132712,
-    "ast_hash": "386ddc10c56d987a894e580fb4a1e0ac",
-    "semantic_hash": "386ddc10c56d987a894e580fb4a1e0ac"
+    "mtime": 1785097969.5964482,
+    "ast_hash": "dc84ce9947ca694257e1da48ee239de4",
+    "semantic_hash": "dc84ce9947ca694257e1da48ee239de4"
   },
   "CLAUDE.md": {
-    "mtime": 1783904352.3098145,
-    "ast_hash": "82efb97a359f5c7290bf2513d14686be",
-    "semantic_hash": "82efb97a359f5c7290bf2513d14686be"
+    "mtime": 1785097969.5755138,
+    "ast_hash": "8a6643a420fdad6bfb583523bc6cef16",
+    "semantic_hash": "8a6643a420fdad6bfb583523bc6cef16"
   },
   "README.md": {
-    "mtime": 1783916362.1869004,
-    "ast_hash": "4365979ceeb7e971ecb49c6eeaca30c5",
-    "semantic_hash": "4365979ceeb7e971ecb49c6eeaca30c5"
+    "mtime": 1785113723.575097,
+    "ast_hash": "0490927697ef3efed75e5fda9bb115b8",
+    "semantic_hash": "0490927697ef3efed75e5fda9bb115b8"
   },
   "scraper/requirements-scraper.txt": {
-    "mtime": 1782220121.349927,
-    "ast_hash": "3fd5bb58c94e2965ce6a84ac1203b10a",
-    "semantic_hash": "3fd5bb58c94e2965ce6a84ac1203b10a"
+    "mtime": 1785097969.5938675,
+    "ast_hash": "78fae57f37cb7e5aa2ec45ed8dac1b85",
+    "semantic_hash": "78fae57f37cb7e5aa2ec45ed8dac1b85"
   },
-  "scraper/scrape_report.md": {
-    "mtime": 1783131261.4010954,
-    "ast_hash": "43d342fea72fd27264dee36359eb2c5f",
-    "semantic_hash": "43d342fea72fd27264dee36359eb2c5f"
+  "scraper/chat_assistant.py": {
+    "mtime": 1785113877.9693277,
+    "ast_hash": "256ba0f60fdecfc415c177f4c2ca9f00",
+    "semantic_hash": "256ba0f60fdecfc415c177f4c2ca9f00"
+  },
+  "scraper/chrome_login.py": {
+    "mtime": 1785115781.0791442,
+    "ast_hash": "230cccc0d2524ae2b9c933078db9b1a4",
+    "semantic_hash": "230cccc0d2524ae2b9c933078db9b1a4"
+  },
+  "scraper/ollama_client.py": {
+    "mtime": 1785111516.5031593,
+    "ast_hash": "cbca0f96dcf5faadb51274420e3c15e4",
+    "semantic_hash": "cbca0f96dcf5faadb51274420e3c15e4"
+  },
+  "scraper/price_lookup.py": {
+    "mtime": 1785111656.5486512,
+    "ast_hash": "644f73a1f9595b8c5c4ea1d56eae72df",
+    "semantic_hash": "644f73a1f9595b8c5c4ea1d56eae72df"
+  },
+  "scraper/scheduled_scrape.py": {
+    "mtime": 1785111546.924101,
+    "ast_hash": "3c8dea524469f28d621c7021306429df",
+    "semantic_hash": "3c8dea524469f28d621c7021306429df"
   }
 }

@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -199,28 +200,66 @@ def cmd_show_output(args: argparse.Namespace) -> None:
 
 
 def cmd_login(_args: argparse.Namespace) -> None:
-    """Open a visible browser so the user can log in and set their address, then save the session."""
+    """
+    Open a visible browser so the user can log in and set their address, then save the session.
+
+    Uses a persistent on-disk Chrome profile (scraper/browser_profile/) rather than a
+    throwaway context. Instacart fingerprints fresh automated contexts and silently
+    disables the login button — a profile that persists across runs reads as a real
+    returning user and gets through. The profile also keeps you logged in on its own,
+    so session.json is really just a convenience export for the scraping runs.
+    """
     from playwright.async_api import async_playwright
 
+    from scraper.core import BROWSER_ARGS, BROWSER_CHANNEL, CONTEXT_KWARGS, STEALTH_AVAILABLE
+
     session_path = Path(__file__).parent / "session.json"
+    profile_dir = Path(__file__).parent / "browser_profile"
 
     async def do_login() -> None:
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(
-                headless=False,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-            )
-            context = await browser.new_context(
-                viewport={"width": 1366, "height": 768},
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                locale="en-US",
-                timezone_id="America/New_York",
-            )
-            page = await context.new_page()
+            # launch_persistent_context writes a real Chrome profile to disk and reuses
+            # it every run. Combined with the automation flags stripped below, this is
+            # what gets past the login-button block that a plain new_context() hits.
+            persistent_kwargs: dict = {
+                "headless": False,
+                "args": BROWSER_ARGS + [
+                    # Chrome shows an "automated software" infobar and sets extra
+                    # automation bits without these; both are strong bot signals.
+                    "--disable-infobars",
+                    "--exclude-switches=enable-automation",
+                ],
+                "ignore_default_args": ["--enable-automation"],
+                **CONTEXT_KWARGS,
+            }
+            if BROWSER_CHANNEL:
+                persistent_kwargs["channel"] = BROWSER_CHANNEL
+                print(f"[login] Browser channel: {BROWSER_CHANNEL}")
+
+            try:
+                context = await pw.chromium.launch_persistent_context(
+                    str(profile_dir), **persistent_kwargs
+                )
+            except Exception as e:
+                if not BROWSER_CHANNEL:
+                    raise
+                print(f"[login] Channel '{BROWSER_CHANNEL}' unavailable ({e}); using bundled Chromium.")
+                persistent_kwargs.pop("channel", None)
+                context = await pw.chromium.launch_persistent_context(
+                    str(profile_dir), **persistent_kwargs
+                )
+            page = context.pages[0] if context.pages else await context.new_page()
+
+            if STEALTH_AVAILABLE:
+                from playwright_stealth import Stealth
+                await Stealth().apply_stealth_async(page)
+                print("[login] Stealth mode active.")
+            else:
+                print("[login] WARNING: playwright-stealth not installed — Instacart will likely")
+                print("[login]          block the login button. Install it first:")
+                print("[login]          pip install playwright-stealth")
+
+            print(f"[login] Using persistent browser profile: {profile_dir}")
             await page.goto("https://www.instacart.com/login")
 
             print("\n[login] Browser opened to the Instacart login page.")
@@ -230,6 +269,8 @@ def cmd_login(_args: argparse.Namespace) -> None:
             print("  3. Wait until you can see the Instacart homepage (not a login page)")
             print(f"  4. Set your delivery address to: {_scraper_module.DELIVERY_ADDRESS}")
             print("  5. Confirm you can see a list of stores")
+            print("\n[login] Tip: prefer the email + password form over Google/Facebook sign-in —")
+            print("[login]      third-party popups are the most aggressively bot-checked path.")
             print("\n[login] The browser will stay open until you press ENTER here.")
             print("[login] DO NOT press ENTER until step 5 is done.\n")
 
@@ -240,8 +281,17 @@ def cmd_login(_args: argparse.Namespace) -> None:
             active_page = all_pages[-1] if len(all_pages) > 1 else page
             print(f"[login] Active tab URL: {active_page.url}")
 
-            await context.storage_state(path=str(session_path))
-            await browser.close()
+            state = await context.storage_state(path=str(session_path))
+            await context.close()
+
+        # Tracking cookies alone mean the login didn't take — say so rather than
+        # letting the next scrape fail with a confusing "No stores found".
+        names = {c["name"] for c in state.get("cookies", [])}
+        if not any(re.search(r"sess|auth|token|_ic_|user", n, re.I) for n in names):
+            print("\n[login] WARNING: no login cookies were saved — you may not be logged in.")
+            print(f"[login]          Cookies found: {', '.join(sorted(names)) or 'none'}")
+            print("[login]          Re-run --login and make sure you reach the store list first.")
+            return
 
         print(f"[login] Session saved to {session_path}")
         print("[login] You can now run the scraper normally.")
