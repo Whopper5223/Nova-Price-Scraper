@@ -19,6 +19,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from scraper.snap_eligibility import is_snap_eligible
+
 # Deliberately does not import scraper.core: that pulls in Playwright, and reading
 # saved prices should work anywhere (schedulers, quick checks) without the browser
 # stack installed. SCRAPER_DIR and the matching rule are small enough to restate.
@@ -27,6 +29,15 @@ PRICES_PATH = SCRAPER_DIR / "prices_output.json"
 
 # How old saved prices may be before the assistant prefers a live scrape.
 DEFAULT_MAX_AGE_HOURS = 72
+
+# Overridable at startup (--prices-file) so a sample multi-store dataset can be
+# swapped in for testing without touching the real scrape output.
+_ACTIVE_PATH: Path | None = None
+
+
+def set_prices_path(path: Path | None) -> None:
+    global _ACTIVE_PATH
+    _ACTIVE_PATH = path
 
 
 def _matches_query(name: str, query: str) -> bool:
@@ -41,7 +52,7 @@ def _matches_query(name: str, query: str) -> bool:
 
 def load_latest(path: Path | None = None) -> dict | None:
     """Parsed prices_output.json, or None if it's missing or unreadable."""
-    src = path or PRICES_PATH
+    src = path or _ACTIVE_PATH or PRICES_PATH
     if not src.exists():
         return None
     try:
@@ -70,13 +81,15 @@ def query_prices(term: str, limit: int = 20, path: Path | None = None) -> list[d
             price = product.get("price")
             if price is None or not _matches_query(name, term):
                 continue
+            department = product.get("department")
             matches.append({
                 "store_name": store.get("name"),
                 "store_url": store.get("url"),
                 "name": name,
                 "price": price,
                 "unit": product.get("unit"),
-                "department": product.get("department"),
+                "department": department,
+                "snap_eligible": is_snap_eligible(name, department),
             })
 
     matches.sort(key=lambda p: p["price"])

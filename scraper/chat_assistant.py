@@ -40,6 +40,7 @@ if _env_file.exists():
 
 from scraper import ollama_client, price_lookup
 from scraper.ollama_client import OllamaError
+from scraper.snap_eligibility import is_snap_eligible
 
 DEFAULT_MAX_STORES = 4
 DEFAULT_RESULTS = 5
@@ -60,7 +61,12 @@ The system looks up actual prices separately and shows them to the user."""
 EXTRACT_SYSTEM_PROMPT = """You extract a grocery shopping list from a conversation.
 
 Return ONLY a JSON object of this exact shape:
-{"ready": true|false, "items": ["milk", "eggs"], "missing": "what is still unknown"}
+{"ready": true|false, "items": ["milk", "eggs"], "missing": "what is still unknown",
+ "budget": 30.00}
+
+"budget" is a dollar amount ONLY if the user stated a spending limit ("under $30",
+"I've got about 40 bucks", "keep it cheap, budget is 25"). Plain number, no dollar sign,
+no cents rounding beyond what the user said. If no budget was mentioned, use null.
 
 READ THE ENTIRE CONVERSATION. Items come from everything the user has said across all
 their messages, not just the most recent one. If the user says "chicken parm" in their
@@ -96,11 +102,29 @@ scraped or read from saved scrape results.
 
 Rules:
 - Use ONLY the numbers in the JSON. Never invent, adjust, or estimate a price.
-- If an item has no results, say plainly that you couldn't find a price for it.
-- Call out the cheapest store per item, and the best overall store if one is clearly best.
-- Give an approximate basket total using the cheapest price found for each item, and say
-  it's approximate.
+- "priced_items" is a dict keyed by item name — every key in it HAS at least one real
+  price row. Only say "no price found" / "no results" for an item if it appears in
+  "items_with_no_results", never for an item that is a key in "priced_items".
 - Mention the store name and the specific product name behind each price.
+- Each row has a snap_eligible field: true (SNAP/EBT eligible), false (not eligible —
+  e.g. alcohol, hot prepared food, household goods, supplements), or null (uncertain,
+  user should double-check at checkout). Flag any item that is false or null so an
+  EBT shopper isn't surprised at checkout.
+- Note that whether a store or order actually accepts EBT payment depends on that
+  retailer, not on this list — this only tells you which items would qualify.
+- You are also given "store_totals": one entry per store, with the total cost of
+  buying everything there in one trip (covers_all_items = true means that store has
+  every item), and which items (if any) that store is missing. Recommend the cheapest
+  store with covers_all_items = true as the one-stop option and give its total. If no
+  store covers everything, say so plainly and name the closest option and what it's
+  missing — do not pretend a partial store covers the whole list.
+- Also mention the cheapest-possible total if the user were willing to split the trip
+  across stores (cheapest price per item, regardless of store) ONLY if it meaningfully
+  beats the best one-stop total — otherwise skip it, it's not worth the hassle for a
+  few cents.
+- If "budget" is not null, compare it against the one-stop total. Say clearly whether
+  it fits, and by how much. If it doesn't fit anywhere, say so and suggest which item(s)
+  to drop to get under budget (pick the priciest ones).
 - Be concise and conversational. Short paragraphs or a compact list. No markdown tables."""
 
 
@@ -108,13 +132,21 @@ Rules:
 # Turning the conversation into a shopping list
 # ---------------------------------------------------------------------------
 
+def _parse_budget(raw) -> float | None:
+    """Coerce whatever the model put in "budget" into a clean float, or None."""
+    try:
+        return round(float(raw), 2) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_list(history: list[dict]) -> dict:
     """
     Ask the model, in a separate JSON-mode call, whether the conversation has settled
     into a shopping list. Kept apart from the visible chat turn because small local
     models are much more reliable when each call has exactly one job.
 
-    Returns {"ready": bool, "items": list[str], "missing": str}.
+    Returns {"ready": bool, "items": list[str], "missing": str, "budget": float | None}.
     """
     transcript = "\n".join(
         f"{'USER' if m['role'] == 'user' else 'ASSISTANT'}: {m['content']}" for m in history
@@ -135,7 +167,7 @@ def _extract_list(history: list[dict]) -> dict:
     )
 
     if not isinstance(result, dict):
-        return {"ready": False, "items": [], "missing": ""}
+        return {"ready": False, "items": [], "missing": "", "budget": None}
 
     items = [str(i).strip() for i in result.get("items", []) if str(i).strip()]
     # Cheap dedupe that also collapses case variants ("Milk" vs "milk").
@@ -147,10 +179,13 @@ def _extract_list(history: list[dict]) -> dict:
             seen.add(key)
             deduped.append(item.lower())
 
+    budget = _parse_budget(result.get("budget"))
+
     return {
         "ready": bool(result.get("ready")) and bool(deduped),
         "items": deduped,
         "missing": str(result.get("missing") or ""),
+        "budget": budget,
     }
 
 
@@ -206,13 +241,15 @@ async def _price_live(items: list[str], max_stores: int, n_results: int) -> dict
             if not res or res.get("count", 0) == 0:
                 continue
             cheapest = min(res["products"], key=lambda p: p["price"]) if res.get("products") else None
+            name = cheapest["name"] if cheapest else item
             findings.setdefault(item, []).append({
                 "store_name": store["name"],
                 "store_url": store.get("url"),
-                "name": cheapest["name"] if cheapest else item,
+                "name": name,
                 "price": res["min"],
                 "unit": cheapest.get("unit") if cheapest else None,
                 "department": None,
+                "snap_eligible": is_snap_eligible(name),
             })
 
     for item in findings:
@@ -220,34 +257,101 @@ async def _price_live(items: list[str], max_stores: int, n_results: int) -> dict
     return findings
 
 
-def _summarize(user_request: str, findings: dict, missing: list[str]) -> str:
+def _store_basket_totals(findings: dict, all_items: list[str]) -> list[dict]:
+    """
+    For each store that appears in any item's rows, total up what buying everything
+    it stocks would cost — the "one-stop shop" view a real EBT/budget shopper needs,
+    as opposed to a per-item cheapest that might mean visiting four different stores.
+
+    Each row in findings[item] is already one-per-store (price_lookup.cheapest_by_store
+    or the live-lookup equivalent), so this is just a pivot: item->store->price
+    becomes store->total, with coverage tracked so a store missing half the list
+    doesn't masquerade as a bargain.
+    """
+    store_prices: dict[str, dict[str, float]] = {}
+    for item, rows in findings.items():
+        for row in rows:
+            store_prices.setdefault(row["store_name"], {})[item] = row["price"]
+
+    totals = []
+    for store, prices in store_prices.items():
+        covered = [i for i in all_items if i in prices]
+        totals.append({
+            "store_name": store,
+            "covers_all_items": len(covered) == len(all_items),
+            "items_covered": len(covered),
+            "items_total": len(all_items),
+            "missing_items": [i for i in all_items if i not in prices],
+            "total": round(sum(prices[i] for i in covered), 2),
+        })
+    totals.sort(key=lambda r: (not r["covers_all_items"], r["total"]))
+    return totals
+
+
+def _summarize(user_request: str, findings: dict, missing: list[str], all_items: list[str],
+                budget: float | None = None) -> str:
     """Have the model narrate the real numbers. Falls back to a plain table on failure."""
     payload = {
         "request": user_request,
+        "budget": budget,
         "priced_items": findings,
         "items_with_no_results": missing,
+        "store_totals": _store_basket_totals(findings, all_items),
     }
     try:
         return ollama_client.chat(
             [{"role": "user", "content": json.dumps(payload, indent=2)}],
             system=SUMMARY_SYSTEM_PROMPT,
-            temperature=0.3,
+            temperature=0.1,
         )
     except OllamaError as e:
         print(f"[nova] Could not reach Ollama for the summary: {e}")
-        return _plain_summary(findings, missing)
+        return _plain_summary(findings, missing, all_items, budget)
 
 
-def _plain_summary(findings: dict, missing: list[str]) -> str:
+def _snap_tag(eligible: bool | None) -> str:
+    if eligible is True:
+        return ""
+    if eligible is False:
+        return "  [not SNAP/EBT eligible]"
+    return "  [SNAP eligibility unclear — verify at checkout]"
+
+
+def _plain_summary(findings: dict, missing: list[str], all_items: list[str],
+                    budget: float | None = None) -> str:
     """Deterministic fallback so results are never lost to an LLM failure."""
     lines = []
     total = 0.0
+    snap_total = 0.0
     for item, rows in findings.items():
         best = rows[0]
         total += best["price"]
-        lines.append(f"  {item:<24} ${best['price']:.2f}  at {best['store_name']}  ({best['name']})")
+        if best.get("snap_eligible") is True:
+            snap_total += best["price"]
+        tag = _snap_tag(best.get("snap_eligible"))
+        lines.append(f"  {item:<24} ${best['price']:.2f}  at {best['store_name']}  ({best['name']}){tag}")
     if lines:
-        lines.append(f"\n  Approximate basket total: ${total:.2f}")
+        lines.append(f"\n  Cheapest-per-item total (may span stores): ${total:.2f}")
+        lines.append(f"  SNAP/EBT-eligible-only total: ${snap_total:.2f}")
+
+    store_totals = _store_basket_totals(findings, all_items)
+    one_stop = next((s for s in store_totals if s["covers_all_items"]), None)
+    if one_stop:
+        lines.append(f"\n  Best one-stop store: {one_stop['store_name']} — ${one_stop['total']:.2f} for everything")
+    elif store_totals:
+        best_partial = store_totals[0]
+        lines.append(
+            f"\n  No single store has everything. Closest: {best_partial['store_name']} "
+            f"(${best_partial['total']:.2f}, missing {', '.join(best_partial['missing_items'])})"
+        )
+
+    if budget is not None:
+        reference = one_stop["total"] if one_stop else total
+        if reference <= budget:
+            lines.append(f"  Within budget: ${reference:.2f} of ${budget:.2f}")
+        else:
+            lines.append(f"  Over budget: ${reference:.2f} vs ${budget:.2f} (${reference - budget:.2f} over)")
+
     for item in missing:
         lines.append(f"  {item:<24} no price found")
     return "\n".join(lines) if lines else "  No prices found."
@@ -264,7 +368,8 @@ def _print_findings(findings: dict, missing: list[str]) -> None:
         print(f"  {item}")
         for row in rows[:5]:
             unit = f"  ({row['unit']})" if row.get("unit") else ""
-            print(f"      ${row['price']:>7.2f}  {row['store_name']:<22} {row['name']}{unit}")
+            tag = _snap_tag(row.get("snap_eligible"))
+            print(f"      ${row['price']:>7.2f}  {row['store_name']:<22} {row['name']}{unit}{tag}")
     for item in missing:
         print(f"  {item}\n      no results")
     print("-" * 60)
@@ -292,18 +397,21 @@ async def _handle_recipe_url(url: str, max_stores: int) -> None:
     findings: dict[str, list[dict]] = {}
     for store in result["stores"]:
         for ingredient, res in store.get("results", {}).items():
+            name = res["products"][0]["name"] if res.get("products") else ingredient
             findings.setdefault(ingredient, []).append({
                 "store_name": store["name"],
-                "name": res["products"][0]["name"] if res.get("products") else ingredient,
+                "name": name,
                 "price": res["price_min"],
                 "unit": res["products"][0].get("unit") if res.get("products") else None,
+                "snap_eligible": is_snap_eligible(name),
             })
     for item in findings:
         findings[item].sort(key=lambda r: r["price"])
 
     not_found = sorted({i for s in result["stores"] for i in s.get("not_found", [])})
     request = f"Price the ingredients for this recipe: {result.get('recipe_name') or url}"
-    print("\n" + _summarize(request, findings, not_found) + "\n")
+    all_items = list(findings.keys()) + not_found
+    print("\n" + _summarize(request, findings, not_found, all_items) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +438,8 @@ def _confirm_list(items: list[str]) -> list[str] | None:
     return edited or None
 
 
-async def _run_chat(max_age_hours: int, max_stores: int, n_results: int, force_live: bool) -> None:
+async def _run_chat(max_age_hours: int, max_stores: int, n_results: int, force_live: bool,
+                     live_fallback: bool) -> None:
     history: list[dict] = []
 
     print("=" * 60)
@@ -390,11 +499,15 @@ async def _run_chat(max_age_hours: int, max_stores: int, n_results: int, force_l
         else:
             saved_findings, unresolved = _price_from_saved(confirmed, max_age_hours)
 
-        try:
-            live_findings = await _price_live(unresolved, max_stores, n_results)
-        except Exception as e:
-            print(f"[nova] Live lookup failed: {e}")
-            live_findings = {}
+        live_findings = {}
+        if unresolved and (force_live or live_fallback):
+            try:
+                live_findings = await _price_live(unresolved, max_stores, n_results)
+            except Exception as e:
+                print(f"[nova] Live lookup failed: {e}")
+        elif unresolved:
+            print(f"[nova] {len(unresolved)} item(s) not in saved prices — "
+                  f"skipping live lookup (pass --live-fallback to enable it).")
 
         findings = {**saved_findings, **live_findings}
         missing = [i for i in confirmed if i not in findings]
@@ -402,7 +515,7 @@ async def _run_chat(max_age_hours: int, max_stores: int, n_results: int, force_l
         _print_findings(findings, missing)
 
         request = next((m["content"] for m in history if m["role"] == "user"), "")
-        print("\nnova > " + _summarize(request, findings, missing) + "\n")
+        print("\nnova > " + _summarize(request, findings, missing, confirmed, extracted["budget"]) + "\n")
 
         # Fresh slate so the next request isn't priced against this one's context.
         history.clear()
@@ -433,15 +546,24 @@ Setup:
                         help=f"Use saved prices only if newer than this (default: {price_lookup.DEFAULT_MAX_AGE_HOURS}).")
     parser.add_argument("--live", action="store_true",
                         help="Always scrape live, ignoring saved prices.")
+    parser.add_argument("--live-fallback", action="store_true",
+                        help="Scrape live for items missing from saved prices (default: report them "
+                             "as not found — the scraper is meant to run on its own schedule via "
+                             "scheduled_scrape.py, not per-chat).")
     parser.add_argument("--max-stores", type=int, default=DEFAULT_MAX_STORES, metavar="N",
                         help=f"Stores to check on live lookups (default: {DEFAULT_MAX_STORES}).")
     parser.add_argument("--results", type=int, default=DEFAULT_RESULTS, metavar="N",
                         help=f"Products per item feeding live price ranges (default: {DEFAULT_RESULTS}).")
+    parser.add_argument("--prices-file", metavar="PATH", default=None,
+                        help="Use a different saved-prices JSON instead of prices_output.json "
+                             "(e.g. a sample multi-store dataset for testing).")
 
     args = parser.parse_args()
 
     if args.model:
         ollama_client.OLLAMA_MODEL = args.model
+    if args.prices_file:
+        price_lookup.set_prices_path(Path(args.prices_file))
 
     warnings = ollama_client.check_ready()
     if warnings:
@@ -456,6 +578,7 @@ Setup:
             max_stores=args.max_stores,
             n_results=args.results,
             force_live=args.live,
+            live_fallback=args.live_fallback,
         ))
     except KeyboardInterrupt:
         print("\n[nova] Bye.")
