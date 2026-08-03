@@ -1,0 +1,388 @@
+{
+  "scraped_at": "2026-08-02T16:52:47.655187+00:00",
+  "location": "Sample Test City, MA (synthetic data for testing)",
+  "stores": [
+    {
+      "name": "ALDI",
+      "url": "https://www.instacart.com/store/aldi/storefront",
+      "product_count": 14,
+      "products": [
+        {
+          "name": "Chicken Breast",
+          "price": 3.49,
+          "unit": null,
+          "department": "meat-and-seafood"
+        },
+        {
+          "name": "White Rice",
+          "price": 1.89,
+          "unit": null,
+          "department": "dry-goods-pasta"
+        },
+        {
+          "name": "Olive Oil",
+          "price": 4.99,
+          "unit": null,
+          "department": "oils-vinegars-spices"
+        },
+        {
+          "name": "Milk",
+          "price": 2.79,
+          "unit": null,
+          "department": "dairy"
+        },
+        {
+          "name": "Eggs",
+          "price": 2.49,
+          "unit": null,
+          "department": "dairy"
+        },
+        {
+          "name": "Bread",
+          "price": 1.99,
+          "unit": null,
+          "department": "baked-goods"
+        },
+        {
+          "name": "Bananas",
+          "price": 0.49,
+          "unit": null,
+          "department": "produce"
+        },
+        {
+          "name": "Pasta",
+          "price": 0.99,
+          "unit": null,
+          "department": "dry-goods-pasta"
+        },
+        {
+          "name": "Marinara Sauce",
+          "price": 1.79,
+          "unit": null,
+          "department": "condiments-sauces"
+        },
+        {
+          "name": "Ground Beef",
+          "price": 4.49,
+          "unit": null,
+          "department": "meat-and-seafood"
+        },
+        {
+          "name": "Cereal",
+          "price": 2.49,
+          "unit": null,
+          "department": "breakfast-foods"
+        },
+        {
+          "name": "Coffee",
+          "price": 4.99,
+          "unit": null,
+          "department": "beverages"
+        },
+        {
+          "name": "Frozen Pizza",
+          "price": 3.49,
+          "unit": null,
+          "department": "frozen"
+        },
+        {
+          "name": "Canned Black Beans",
+          "price": 0.79,
+          "unit": null,
+          "department": "canned-goods"
+        }
+      ]
+    },
+    {
+      "name": "Market Basket",
+      "url": "https://www.instacart.com/store/market-basket/storefront",
+      "product_count": 15,
+      "products": [
+        {
+          "name": "Chicken Breast",
+          "price": 3.99,
+          "unit": null,
+          "department": "meat-and-seafood"
+        },
+        {
+          "name": "White Rice",
+          "price": 2.29,
+          "unit": null,
+          "department": "dry-goods-pasta"
+        },
+        {
+          "name": "Olive Oil",
+          "price": 5.49,
+          "unit": null,
+          "department": "oils-vinegars-spices"
+        },
+        {
+          "name": "Milk",
+          "price": 2.99,
+          "unit": null,
+          "department": "dairy"
+        },
+        {
+          "name": "Eggs",
+          "price": 2.69,
+          "unit": null,
+          "department": "dairy"
+        },
+        {
+          "name": "Bread",
+          "price": 2.29,
+          "unit": null,
+          "department": "baked-goods"
+        },
+        {
+          "name": "Bananas",
+          "price": 0.59,
+          "unit": null,
+          "department": "produce"
+        },
+        {
+          "name": "Pasta",
+          "price": 1.29,
+          "unit": null,
+          "department": "dry-goods-pasta"
+        },
+        {
+          "name": "Marinara Sauce",
+          "price": 2.19,
+          "unit": null,
+          "department": "condiments-sauces"
+        },
+        {
+          "name": "Ground Beef",
+          "price": 4.99,
+          "unit": null,
+          "department": "meat-and-seafood"
+        },
+        {
+          "name": "Cereal",
+          "price": 2.99,
+          "unit": null,
+          "department": "breakfast-foods"
+        },
+        {
+          "name": "Coffee",
+          "price": 5.49,
+          "unit": null,
+          "department": "beverages"
+        },
+        {
+          "name": "Orange Juice",
+          "price": 3.29,
+          "unit": null,
+          "department": "beverages"
+        },
+        {
+          "name": "Cheddar Cheese",
+          "price": 3.99,
+          "unit": null,
+          "department": "dairy"
+        },
+        {
+          "name": "Multivitamin Gummies",
+          "price": 8.99,
+          "unit": null,
+          "department": "health-care"
+        }
+      ]
+    },
+    {
+      "name": "Stop & Shop",
+      "url": "https://www.instacart.com/store/stop-and-shop/storefront",
+      "product_count": 15,
+      "products": [
+        {
+          "name": "Chicken Breast",
+          "price": 4.29,
+          "unit": null,
+          "department": "meat-and-seafood"
+        },
+        {
+          "name": "White Rice",
+          "price": 2.49,
+          "unit": null,
+          "department": "dry-goods-pasta"
+        },
+        {
+          "name": "Olive Oil",
+          "price": 5.99,
+          "unit": null,
+          "department": "oils-vinegars-spices"
+        },
+        {
+          "name": "Milk",
+          "price": 3.29,
+          "unit": null,
+          "department": "dairy"
+        },
+        {
+          "name": "Eggs",
+          "price": 2.99,
+          "unit": null,
+          "department": "dairy"
+        },
+        {
+          "name": "Bread",
+          "price": 2.49,
+          "unit": null,
+          "department": "baked-goods"
+        },
+        {
+          "name": "Bananas",
+          "price": 0.65,
+          "unit": null,
+          "department": "produce"
+        },
+        {
+          "name": "Pasta",
+          "price": 1.49,
+          "unit": null,
+          "department": "dry-goods-pasta"
+        },
+        {
+          "name": "Marinara Sauce",
+          "price": 2.49,
+          "unit": null,
+          "department": "condiments-sauces"
+        },
+        {
+          "name": "Ground Beef",
+          "price": 5.49,
+          "unit": null,
+          "department": "meat-and-seafood"
+        },
+        {
+          "name": "Cereal",
+          "price": 3.49,
+          "unit": null,
+          "department": "breakfast-foods"
+        },
+        {
+          "name": "Coffee",
+          "price": 5.99,
+          "unit": null,
+          "department": "beverages"
+        },
+        {
+          "name": "Greek Yogurt",
+          "price": 4.49,
+          "unit": null,
+          "department": "dairy"
+        },
+        {
+          "name": "Organic Spinach",
+          "price": 2.99,
+          "unit": null,
+          "department": "produce"
+        },
+        {
+          "name": "Bud Light 12Pk",
+          "price": 13.99,
+          "unit": null,
+          "department": "beverages"
+        }
+      ]
+    },
+    {
+      "name": "Target",
+      "url": "https://www.instacart.com/store/target/storefront",
+      "product_count": 15,
+      "products": [
+        {
+          "name": "Chicken Breast",
+          "price": 4.49,
+          "unit": null,
+          "department": "meat-and-seafood"
+        },
+        {
+          "name": "White Rice",
+          "price": 2.99,
+          "unit": null,
+          "department": "dry-goods-pasta"
+        },
+        {
+          "name": "Olive Oil",
+          "price": 6.49,
+          "unit": null,
+          "department": "oils-vinegars-spices"
+        },
+        {
+          "name": "Milk",
+          "price": 3.49,
+          "unit": null,
+          "department": "dairy"
+        },
+        {
+          "name": "Eggs",
+          "price": 3.19,
+          "unit": null,
+          "department": "dairy"
+        },
+        {
+          "name": "Bread",
+          "price": 2.79,
+          "unit": null,
+          "department": "baked-goods"
+        },
+        {
+          "name": "Bananas",
+          "price": 0.69,
+          "unit": null,
+          "department": "produce"
+        },
+        {
+          "name": "Pasta",
+          "price": 1.59,
+          "unit": null,
+          "department": "dry-goods-pasta"
+        },
+        {
+          "name": "Marinara Sauce",
+          "price": 2.99,
+          "unit": null,
+          "department": "condiments-sauces"
+        },
+        {
+          "name": "Ground Beef",
+          "price": 5.99,
+          "unit": null,
+          "department": "meat-and-seafood"
+        },
+        {
+          "name": "Cereal",
+          "price": 3.99,
+          "unit": null,
+          "department": "breakfast-foods"
+        },
+        {
+          "name": "Coffee",
+          "price": 6.99,
+          "unit": null,
+          "department": "beverages"
+        },
+        {
+          "name": "Paper Towels",
+          "price": 6.99,
+          "unit": null,
+          "department": "household"
+        },
+        {
+          "name": "Laundry Detergent",
+          "price": 9.99,
+          "unit": null,
+          "department": "household"
+        },
+        {
+          "name": "Rotisserie Chicken",
+          "price": 5.99,
+          "unit": null,
+          "department": "deli"
+        }
+      ]
+    }
+  ]
+}

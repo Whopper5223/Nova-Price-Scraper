@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Nova — Grocery Assistant</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">N</span>
+      <span class="brand-name">Nova</span>
+    </div>
+    <p class="status" id="status" role="status">Connecting…</p>
+  </header>
+
+  <main class="chat" id="chat" aria-live="polite" aria-label="Conversation">
+    <div class="msg msg--assistant">
+      <p>Tell me what you're cooking or shopping for — a meal, a week of dinners, dietary
+      restrictions, whatever. I'll build a list and go check real prices.</p>
+    </div>
+  </main>
+
+  <section class="confirm" id="confirmBox" hidden aria-label="Confirm shopping list">
+    <h2>Here's the list</h2>
+    <p class="confirm-hint">Click × to remove anything you already have.</p>
+    <ul class="confirm-list" id="confirmList"></ul>
+    <div class="confirm-actions">
+      <button class="btn btn--primary" id="confirmYes" type="button">Looks good — price it</button>
+      <button class="btn btn--ghost" id="confirmNo" type="button">Keep talking</button>
+    </div>
+  </section>
+
+  <section class="results" id="results" hidden aria-label="Price results"></section>
+
+  <form class="composer" id="composer">
+    <label class="sr-only" for="input">Message</label>
+    <input
+      id="input"
+      type="text"
+      autocomplete="off"
+      placeholder="e.g. chicken parm for 4, one of us is vegetarian"
+      aria-describedby="status"
+    />
+    <button class="btn btn--primary" type="submit" id="sendBtn">Send</button>
+  </form>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
