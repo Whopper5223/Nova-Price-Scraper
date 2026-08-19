@@ -61,39 +61,59 @@ The system looks up actual prices separately and shows them to the user."""
 EXTRACT_SYSTEM_PROMPT = """You extract a grocery shopping list from a conversation.
 
 Return ONLY a JSON object of this exact shape:
-{"ready": true|false, "items": ["milk", "eggs"], "missing": "what is still unknown",
- "budget": 30.00}
+{"ready": <true or false>, "items": [<lowercase grocery search terms, or empty list>],
+ "missing": <one short sentence on what's still unclear, or empty string>,
+ "budget": <a plain number with no dollar sign, or null>}
+
+That is a description of the SHAPE only, not sample content — no placeholder word in it
+is a real grocery item, so never copy anything from this instruction block into "items".
+Every item in your answer must trace back to something the user actually wrote below.
 
 "budget" is a dollar amount ONLY if the user stated a spending limit ("under $30",
-"I've got about 40 bucks", "keep it cheap, budget is 25"). Plain number, no dollar sign,
-no cents rounding beyond what the user said. If no budget was mentioned, use null.
+"I've got about 40 bucks", "keep it cheap, budget is 25"). If no budget was mentioned,
+use null.
 
-READ THE ENTIRE CONVERSATION. Items come from everything the user has said across all
-their messages, not just the most recent one. If the user says "chicken parm" in their
-first message and "also need pasta" in a later one, the list must include BOTH the
-ingredients for chicken parm AND pasta.
+You will be given only the USER's own messages, concatenated across the whole
+conversation — the assistant's replies are deliberately left out. Build the list from
+these user messages alone. A dish or ingredient named in an earlier message counts just
+as much as one named in the latest message — combine everything the user has asked for
+across every message into one list, not just the most recent one.
 
-Include every ingredient a normal cook needs to make the dishes mentioned, even if the
-user never listed them individually. For "chicken parm" that means chicken, marinara
-sauce, mozzarella, parmesan, and breadcrumbs — not just the words the user typed.
+If the assistant previously suggested dishes, ingredients, or options, those suggestions
+are NOT shown to you here and must NOT appear in "items" unless the user's own words
+also named them. A dish the user has not personally named is not on the list yet — this
+is what stops half-picked assistant suggestions from being priced before the user agrees
+to them.
+
+If the user names a prepared dish or meal, include every ingredient a normal cook would
+need to make it, not only the words the user typed — draw on your own general cooking
+knowledge to expand the dish into its typical components. Do not reuse any example
+ingredient list, because none is given here on purpose.
 
 Exclude anything the user says they already have or do not want.
 
-NEVER invent items the user did not ask for or imply. If the user has not mentioned any
-food, dish, meal, or grocery at all, return {"ready": false, "items": [], "missing": "..."}.
-Greetings and small talk ("hi", "hey what's up", "thanks") contain no groceries — return
-an empty list for those. An empty list is always correct when no food was discussed;
-guessing common groceries is always wrong.
+Budget amounts, headcounts ("2 of us", "for 4 people"), and diet words (vegan,
+vegetarian, gluten-free, keto, dairy-free, an allergy, etc.) describe the shopping trip
+but are never themselves grocery items — never put a diet word or a number of people
+into "items". If a message contains ONLY that kind of context and names no actual dish,
+meal, or ingredient, that message has not mentioned any food yet.
 
-When the user HAS named food, set "ready" to true and list its ingredients. A question
-the assistant asked EARLIER that the user has since ANSWERED is not a reason to wait;
-only set "ready" to false if the user's most recent message asks the assistant a
-question, or no food has been mentioned yet.
+NEVER invent items the user did not ask for or imply — this includes not filling in
+"obvious" pantry staples (rice, beans, oil, spices, etc.) the user never named. If the
+user has not mentioned any specific food, dish, meal, or ingredient by name, set "ready"
+to false and "items" to an empty list, even if they gave you budget, diet, or headcount
+info. Greetings and small talk ("hi", "hey what's up", "thanks") also contain no
+groceries — return an empty list for those. An empty list is always correct when no food
+was discussed; inventing items when none were mentioned is always wrong, even if a word
+feels familiar from earlier in this prompt.
+
+When the user HAS named food, set "ready" to true and list its ingredients. Only set
+"ready" to false if the user's most recent message asks a question rather than stating
+what they want, or if no food has been mentioned yet.
 
 "items" must be plain grocery search terms a store search box would understand:
-lowercase, no quantities, no units, no preparation notes, no brand names.
-Good: "olive oil", "chicken breast", "yellow onion"
-Bad: "2 tbsp olive oil", "1 lb chicken breast, diced", "onions (finely chopped)" """
+lowercase product names only — no quantities, no units, no preparation notes, no brand
+names. Describe what the item IS, not how much of it there is or how it's prepared."""
 
 SUMMARY_SYSTEM_PROMPT = """You are Nova, a grocery shopping assistant reporting price results.
 
@@ -118,10 +138,9 @@ Rules:
   store with covers_all_items = true as the one-stop option and give its total. If no
   store covers everything, say so plainly and name the closest option and what it's
   missing — do not pretend a partial store covers the whole list.
-- Also mention the cheapest-possible total if the user were willing to split the trip
-  across stores (cheapest price per item, regardless of store) ONLY if it meaningfully
-  beats the best one-stop total — otherwise skip it, it's not worth the hassle for a
-  few cents.
+- Do NOT suggest splitting the trip across multiple stores or compute any cross-store
+  total yourself. Only ever report a single store's total (from "store_totals"). This
+  is a one-stop-shop recommendation only.
 - If "budget" is not null, compare it against the one-stop total. Say clearly whether
   it fits, and by how much. If it doesn't fit anywhere, say so and suggest which item(s)
   to drop to get under budget (pick the priciest ones).
@@ -148,21 +167,37 @@ def _extract_list(history: list[dict]) -> dict:
 
     Returns {"ready": bool, "items": list[str], "missing": str, "budget": float | None}.
     """
-    transcript = "\n".join(
-        f"{'USER' if m['role'] == 'user' else 'ASSISTANT'}: {m['content']}" for m in history
-    )
-    # Restating everything the user asked for keeps the model from anchoring on only the
-    # last turn, which is how it drops items mentioned earlier in the conversation.
+    # Only the user's own messages are sent — never the assistant's. If the assistant
+    # suggests a dish the user hasn't picked yet, it must not be extractable as an item;
+    # restricting the model's input to user text enforces that structurally instead of
+    # relying on it to infer whose suggestion is whose from a mixed transcript.
     wants = " | ".join(m["content"] for m in history if m["role"] == "user")
-    result = ollama_client.chat_json(
-        [{
+
+    def _turn(user_wants: str) -> dict:
+        return {
             "role": "user",
             "content": (
-                f"Full conversation:\n{transcript}\n\n"
-                f"Everything the user has asked for, across all their messages:\n{wants}\n\n"
+                f"Everything the user has asked for, across all their messages:\n{user_wants}\n\n"
                 "Extract the complete shopping list JSON covering ALL of it."
             ),
-        }],
+        }
+
+    # A worked example, as an actual prior turn rather than prose in the system prompt.
+    # Small local models pattern-match a shown input/output pair far more reliably than
+    # a written rule — and a rule alone previously caused "vegan" itself (and invented
+    # staples like "rice") to leak into "items" for budget/diet/headcount-only messages.
+    demo_input = "I've got fifteen dollars, no dairy, and it's just me eating"
+    demo_output = (
+        '{"ready": false, "items": [], '
+        '"missing": "no specific dish or ingredient named yet", "budget": 15.0}'
+    )
+
+    result = ollama_client.chat_json(
+        [
+            _turn(demo_input),
+            {"role": "assistant", "content": demo_output},
+            _turn(wants),
+        ],
         system=EXTRACT_SYSTEM_PROMPT,
     )
 
@@ -321,18 +356,10 @@ def _plain_summary(findings: dict, missing: list[str], all_items: list[str],
                     budget: float | None = None) -> str:
     """Deterministic fallback so results are never lost to an LLM failure."""
     lines = []
-    total = 0.0
-    snap_total = 0.0
     for item, rows in findings.items():
         best = rows[0]
-        total += best["price"]
-        if best.get("snap_eligible") is True:
-            snap_total += best["price"]
         tag = _snap_tag(best.get("snap_eligible"))
         lines.append(f"  {item:<24} ${best['price']:.2f}  at {best['store_name']}  ({best['name']}){tag}")
-    if lines:
-        lines.append(f"\n  Cheapest-per-item total (may span stores): ${total:.2f}")
-        lines.append(f"  SNAP/EBT-eligible-only total: ${snap_total:.2f}")
 
     store_totals = _store_basket_totals(findings, all_items)
     one_stop = next((s for s in store_totals if s["covers_all_items"]), None)
@@ -345,8 +372,8 @@ def _plain_summary(findings: dict, missing: list[str], all_items: list[str],
             f"(${best_partial['total']:.2f}, missing {', '.join(best_partial['missing_items'])})"
         )
 
-    if budget is not None:
-        reference = one_stop["total"] if one_stop else total
+    if budget is not None and (one_stop or store_totals):
+        reference = one_stop["total"] if one_stop else store_totals[0]["total"]
         if reference <= budget:
             lines.append(f"  Within budget: ${reference:.2f} of ${budget:.2f}")
         else:
