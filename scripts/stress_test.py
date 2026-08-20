@@ -1,12 +1,17 @@
 """Comprehensive edge-case stress test for the chat_assistant pipeline.
-Run from /projects/nova: python3 stress_test.py
+Run from anywhere: python3 scripts/stress_test.py
 
 Sections:
   A. _extract_list edge cases (LLM-backed, the historically buggiest part)
   B. is_snap_eligible edge cases (deterministic, instant, no LLM)
   C. Raw chat-turn adversarial checks (LLM-backed, judged by eye)
 """
+import sys
 import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from scraper import ollama_client
 from scraper.chat_assistant import _extract_list, CHAT_SYSTEM_PROMPT
 from scraper.snap_eligibility import is_snap_eligible
