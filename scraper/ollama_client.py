@@ -128,6 +128,37 @@ def chat(
         raise OllamaError(f"Unexpected response shape from Ollama: {resp.text[:400]}") from e
 
 
+def embed(text: str, model: str = "nomic-embed-text", timeout: int = DEFAULT_TIMEOUT) -> list[float]:
+    """
+    Embedding vector for `text` from Ollama's /api/embeddings endpoint.
+
+    Uses a separate embedding-capable model (default nomic-embed-text) rather
+    than OLLAMA_MODEL, which is a chat model and has no embedding endpoint support.
+
+    Raises OllamaError with setup hints if the server is unreachable, the model
+    isn't pulled, or the response is unusable.
+    """
+    try:
+        resp = requests.post(
+            f"{OLLAMA_URL}/api/embeddings",
+            json={"model": model, "prompt": text},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+    except requests.Timeout as e:
+        raise OllamaError(_hint(f"Ollama timed out after {timeout}s.")) from e
+    except requests.RequestException as e:
+        raise OllamaError(_hint(f"Ollama request failed: {e}")) from e
+
+    try:
+        embedding = resp.json()["embedding"]
+    except (ValueError, KeyError) as e:
+        raise OllamaError(f"Unexpected response shape from Ollama: {resp.text[:400]}") from e
+    if not isinstance(embedding, list) or not embedding:
+        raise OllamaError(f"Ollama returned an empty embedding for model '{model}'.")
+    return embedding
+
+
 def chat_json(
     messages: list[dict],
     system: str | None = None,

@@ -12,6 +12,8 @@ scraper/_debug_*.html
 scraper/_debug_search_*.html
 scraper/scrape_report.md
 scraper/scrape_run.log
+scraper/product_embeddings.db
+scraper/test_dataset.json
 
 # Python
 __pycache__/
