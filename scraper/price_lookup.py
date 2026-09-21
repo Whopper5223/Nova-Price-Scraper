@@ -19,11 +19,13 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from scraper import product_embeddings
 from scraper.snap_eligibility import is_snap_eligible
 
 # Deliberately does not import scraper.core: that pulls in Playwright, and reading
 # saved prices should work anywhere (schedulers, quick checks) without the browser
 # stack installed. SCRAPER_DIR and the matching rule are small enough to restate.
+# product_embeddings has no Playwright dependency, so importing it here is safe.
 SCRAPER_DIR = Path(__file__).parent
 PRICES_PATH = SCRAPER_DIR / "prices_output.json"
 
@@ -38,16 +40,6 @@ _ACTIVE_PATH: Path | None = None
 def set_prices_path(path: Path | None) -> None:
     global _ACTIVE_PATH
     _ACTIVE_PATH = path
-
-
-def _matches_query(name: str, query: str) -> bool:
-    """
-    True if every word of the query appears in the product name (case-insensitive).
-    Mirrors core._matches_query exactly — keep the two in sync so a saved-price hit
-    and a live-search hit mean the same thing.
-    """
-    name_lower = name.lower()
-    return all(tok in name_lower for tok in query.lower().split())
 
 
 def load_latest(path: Path | None = None) -> dict | None:
@@ -66,8 +58,9 @@ def query_prices(term: str, limit: int = 20, path: Path | None = None) -> list[d
     """
     Every saved product matching `term`, cheapest first.
 
-    Matching is the same all-words rule search_products() uses on live pages
-    (core._matches_query), so cached and live lookups agree on what counts as a hit.
+    Matching is the same word-boundary+stemming rule search_products() uses on
+    live pages (product_embeddings.matches_query), so cached and live lookups
+    agree on what counts as a hit.
     Each row: {store_name, store_url, name, price, unit, department}.
     """
     data = load_latest(path)
@@ -79,7 +72,7 @@ def query_prices(term: str, limit: int = 20, path: Path | None = None) -> list[d
         for product in store.get("products", []):
             name = product.get("name") or ""
             price = product.get("price")
-            if price is None or not _matches_query(name, term):
+            if price is None or not product_embeddings.matches_query(name, term):
                 continue
             department = product.get("department")
             matches.append({

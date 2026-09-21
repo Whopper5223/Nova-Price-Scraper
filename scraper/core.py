@@ -32,6 +32,7 @@ except ImportError:
     STEALTH_AVAILABLE = False
     print("[scraper] Warning: playwright-stealth not installed. Bot detection risk is higher.")
 
+from scraper import product_embeddings
 from scraper.selector_healer import heal_selector
 
 # ---------------------------------------------------------------------------
@@ -348,10 +349,8 @@ async def get_card_price(card, selectors: dict) -> Optional[float]:
 # Product search primitive
 # ---------------------------------------------------------------------------
 
-def _matches_query(name: str, query: str) -> bool:
-    """True if every word of the query appears in the product name (case-insensitive)."""
-    name_lower = name.lower()
-    return all(tok in name_lower for tok in query.lower().split())
+# Word-boundary + stemming lexical match now lives in product_embeddings.matches_query,
+# shared with price_lookup.py -- see that module's docstring for why.
 
 
 _UNIT_PRICE_RE = re.compile(
@@ -456,7 +455,7 @@ async def search_products(
                     "unit_price": unit_price,
                     "unit_measure": unit_measure,
                 }
-                if not relevance_filter or _matches_query(name, query):
+                if not relevance_filter or product_embeddings.matches_query(name, query):
                     matched.append(product)
                 elif len(unmatched) < n:
                     unmatched.append(product)
