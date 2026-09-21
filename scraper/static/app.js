@@ -120,12 +120,8 @@ function renderResults(payload) {
   const { findings, missing, summary, live_error, store_totals, budget } = payload;
   const items = Object.entries(findings);
 
-  let total = 0;
-  let snapTotal = 0;
   const rows = items.map(([item, rows]) => {
     const best = rows[0];
-    total += best.price;
-    if (best.snap_eligible === true) snapTotal += best.price;
     return `
       <div class="item-row">
         <div>
@@ -147,10 +143,6 @@ function renderResults(payload) {
   resultsEl.innerHTML = `
     <h2>Prices</h2>
     ${items.length ? rows : '<p class="missing">No prices found for any item.</p>'}
-    ${items.length ? `
-      <div class="totals"><span>Approximate basket total</span><strong>$${total.toFixed(2)}</strong></div>
-      <div class="totals"><span>SNAP/EBT-eligible total</span><strong>$${snapTotal.toFixed(2)}</strong></div>
-    ` : ""}
     ${missingHtml}
     ${errorHtml}
     ${renderStoreTotals(store_totals, budget)}
