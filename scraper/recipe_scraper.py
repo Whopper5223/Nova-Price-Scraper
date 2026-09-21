@@ -43,6 +43,7 @@ from scraper.core import (
     SCRAPER_DIR,
 )
 from scraper.instacart_scraper import MAX_STORES
+from scraper import product_matcher
 
 RECIPE_OUTPUT_PATH = SCRAPER_DIR / "recipe_output.json"
 
@@ -424,6 +425,20 @@ async def run_recipe_scraper(
                 ingredients = [i for i in ingredients if i not in skipped]
             result["skipped"] = skipped
 
+        # Dedupe after normalization: distinct recipe lines routinely normalize
+        # to the same search term (two "salt" lines, "olive oil, divided" used
+        # twice) since normalize_ingredients() strips quantities/prep notes.
+        # Price each distinct grocery item once per store — you buy one salt
+        # regardless of how many lines mention it — order-preserving so the
+        # first occurrence's position still drives display order.
+        seen: set[str] = set()
+        deduped = []
+        for ingredient in ingredients:
+            if ingredient not in seen:
+                seen.add(ingredient)
+                deduped.append(ingredient)
+        ingredients = deduped
+
         result["ingredients"] = ingredients
         print(f"[recipe] Searching for: {', '.join(ingredients)}\n")
 
@@ -484,30 +499,86 @@ async def run_recipe_scraper(
 
             store_slug = store["url"].rstrip("/").split("/")[-2]
 
+            # Sequential — one shared page, can't parallelize live browser interaction.
+            # Ingredients with candidates are held here (not finalized yet) so the
+            # judge can be called once for the whole store instead of once per
+            # ingredient (docs/specs/rag-product-matching-spec.md, Open Questions #2).
+            # `ingredients` is already deduped by this point (see above), so each
+            # entry here is a distinct grocery item — no raw-string collisions to
+            # worry about when this gets written into store_result below.
+            pending: list[tuple[str, dict]] = []
+
             for ingredient in ingredients:
                 if verbose:
                     print(f"[recipe]   Searching: {ingredient}")
                 res = await search_products(page, ingredient, selectors, n=n_results, debug_slug=store_slug)
                 store_slug = ""  # only save debug HTML on first ingredient per store
                 if res["count"] > 0:
-                    store_result["results"][ingredient] = {
-                        "price_min": res["min"],
-                        "price_max": res["max"],
-                        "price_median": res["median"],
-                        "count": res["count"],
-                        "products": res["products"],
-                    }
-                    store_result["basket_total"] += res["min"]
-                    if verbose:
-                        if res["min"] == res["max"]:
-                            print(f"[recipe]     -> ${res['min']:.2f}  ({res['count']} results)")
-                        else:
-                            print(f"[recipe]     -> ${res['min']:.2f}–${res['max']:.2f}  ({res['count']} results)")
+                    pending.append((ingredient, res))
                 else:
                     store_result["not_found"].append(ingredient)
                     if verbose:
                         print(f"[recipe]     -> not found")
                 await _human_delay(short=True)
+
+            if pending:
+                batch = [{"ingredient": ing, "candidates": res["products"]} for ing, res in pending]
+                try:
+                    # recipe["name"] is None for microdata/CSS-heuristic/Gemini-extracted
+                    # pages (only JSON-LD recipes reliably carry a name) — pass a
+                    # placeholder rather than let the prompt render "Recipe: None",
+                    # since the dish name is the disambiguating context Stage 3 exists for.
+                    picks = product_matcher.pick_best_matches(
+                        recipe["name"] or "(unnamed recipe)", ingredients, batch
+                    )
+                except Exception as e:
+                    # chat_json() only catches unparseable JSON — a transport failure
+                    # (Ollama not running, model not pulled, timeout) raises OllamaError
+                    # from inside ollama_client.chat() uncaught. Mid-scrape is the worst
+                    # place for that to propagate: it would abort run_recipe_scraper(),
+                    # skip writing recipe_output.json, and tear down the browser context
+                    # (a live CDP-attached Chrome included). Degrade this store's batch
+                    # to the same "output doesn't validate" fallback pick_best_matches
+                    # uses internally — cheapest Stage-1 candidate per ingredient, index
+                    # 0, per the spec's Architecture/Boundaries "never crash, never
+                    # guess" — and keep scraping the remaining stores. Safe to use index
+                    # 0 unconditionally here: every batch item came from `pending`,
+                    # which only holds ingredients with res["count"] > 0.
+                    print(f"[recipe]   Judge call failed ({e}) — pricing this store's batch at the cheapest candidate.")
+                    picks = [0] * len(batch)
+
+                for (ingredient, res), pick in zip(pending, picks):
+                    # None means the judge validated and explicitly said no
+                    # candidate fits (spec's Open Questions #3) — a rejected
+                    # ingredient contributes no price. Anything that didn't
+                    # validate (malformed/out-of-range judge output, or the
+                    # transport failure above) already became an int — the
+                    # cheapest candidate — inside pick_best_matches/above, so
+                    # it falls through to the normal priced path below.
+                    if pick is None:
+                        store_result["not_found"].append(ingredient)
+                        if verbose:
+                            print(f"[recipe]     {ingredient}: no good match -> not found")
+                        continue
+
+                    product = res["products"][pick]
+                    price = product["price"]
+                    # Picked product goes first so products[0] still matches
+                    # price_min/max/median — chat_assistant.py's recipe-URL path
+                    # reads res["products"][0]["name"] as the label for
+                    # res["price_min"]; leaving the original cheapest-first order
+                    # here would silently pair the wrong name with the judge's price.
+                    other_candidates = [p for i, p in enumerate(res["products"]) if i != pick]
+                    store_result["results"][ingredient] = {
+                        "price_min": price,
+                        "price_max": price,
+                        "price_median": price,
+                        "count": res["count"],
+                        "products": [product] + other_candidates,
+                    }
+                    store_result["basket_total"] += price
+                    if verbose:
+                        print(f"[recipe]     {ingredient}: -> ${price:.2f}  {product['name']}  ({res['count']} candidates)")
 
             result["stores"].append(store_result)
             await _human_delay()
@@ -605,6 +676,8 @@ Examples:
     parser.add_argument("--skip", metavar="NAMES", help='Comma-separated ingredients to leave out, e.g. "water,salt". Partial match.')
     parser.add_argument("--quiet", action="store_true", help="Suppress verbose output.")
     parser.add_argument("--raw", action="store_true", help="Print raw JSON result.")
+    parser.add_argument("--headless", action="store_true",
+                        help="Run browser in headless mode (no visible window, needed on a display-less server). Higher bot detection risk.")
 
     args = parser.parse_args()
 
@@ -618,6 +691,17 @@ Examples:
     max_stores = args.max_stores if args.max_stores is not None else MAX_STORES
     store_filter = [s.strip() for s in args.stores.split(",")] if args.stores else None
     skip = [s.strip() for s in args.skip.split(",") if s.strip()] if args.skip else None
+
+    if args.headless:
+        print("[recipe] Running in headless mode (higher bot detection risk).")
+        import playwright.async_api as _pw_api
+        _original_launch = _pw_api.BrowserType.launch
+
+        async def _headless_launch(self, **kwargs):
+            kwargs["headless"] = True
+            return await _original_launch(self, **kwargs)
+
+        _pw_api.BrowserType.launch = _headless_launch
 
     result = asyncio.run(run_recipe_scraper(
         args.url,
