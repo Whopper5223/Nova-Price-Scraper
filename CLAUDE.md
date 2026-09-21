@@ -1,3 +1,7 @@
+## Git
+
+Always ask for explicit confirmation before running `git push` or `git pull` (or telling the user to run them), even for something that looks small or low-risk. This is a shared repo (Merrimack CS server, group `nova`, teammate Zach) — no push or pull without checking first, no exceptions.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
