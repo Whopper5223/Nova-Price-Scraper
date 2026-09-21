@@ -37,6 +37,7 @@ from scraper.core import (
     INSTACART_URL,
     STEALTH_AVAILABLE,
 )
+from scraper.product_categorizer import categorize_products
 
 # ---------------------------------------------------------------------------
 # Config
@@ -269,7 +270,9 @@ async def _scrape_store_products(page: Page, store: dict, selectors: dict) -> li
 # Public entry point
 # ---------------------------------------------------------------------------
 
-async def run_scraper(verbose: bool = True, store_filter: list[str] | None = None) -> dict:
+async def run_scraper(
+    verbose: bool = True, store_filter: list[str] | None = None, skip_categorize: bool = False,
+) -> dict:
     """
     Run the full scrape: set address → get stores → scrape products → return result dict.
     Saves result to OUTPUT_PATH incrementally after each store (crash-safe).
@@ -310,6 +313,8 @@ async def run_scraper(verbose: bool = True, store_filter: list[str] | None = Non
         for store in stores:
             try:
                 products = await _scrape_store_products(page, store, selectors)
+                if not skip_categorize:
+                    categorize_products(products)
                 result["stores"].append({
                     "name": store["name"],
                     "url": store["url"],
