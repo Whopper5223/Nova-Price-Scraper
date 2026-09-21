@@ -132,7 +132,9 @@ def cmd_scrape(args: argparse.Namespace) -> None:
 
         _pw_api.BrowserType.launch = _headless_launch
 
-    result = asyncio.run(_scraper_module.run_scraper(verbose=not args.quiet, store_filter=store_filter))
+    result = asyncio.run(_scraper_module.run_scraper(
+        verbose=not args.quiet, store_filter=store_filter, skip_categorize=args.skip_categorize,
+    ))
     _print_summary(result)
 
 
@@ -336,6 +338,11 @@ Examples:
         "--headless",
         action="store_true",
         help="Run browser in headless mode (no visible window). Higher bot detection risk.",
+    )
+    parser.add_argument(
+        "--skip-categorize",
+        action="store_true",
+        help="Skip USDA-category classification (an Ollama call per 25 products). Faster on slow/local Ollama when you don't need categories.",
     )
     parser.add_argument(
         "--address",
