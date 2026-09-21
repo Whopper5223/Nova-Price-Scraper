@@ -153,6 +153,8 @@ def main() -> None:
     parser.add_argument("--max-stores", type=int, default=DEFAULT_MAX_STORES, metavar="N")
     parser.add_argument("--results", type=int, default=DEFAULT_RESULTS, metavar="N")
     parser.add_argument("--port", type=int, default=5050)
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="Bind address. Use 0.0.0.0 to accept connections from outside this machine (e.g. behind an opened firewall port). Default 127.0.0.1 (local only).")
     parser.add_argument("--prices-file", metavar="PATH", default=None,
                          help="Use a different saved-prices JSON instead of prices_output.json "
                               "(e.g. a sample multi-store dataset for testing).")
@@ -175,8 +177,8 @@ def main() -> None:
             print(f"  {w}\n")
         sys.exit(1)
 
-    print(f"[nova] Serving on http://localhost:{args.port} (model: {ollama_client.OLLAMA_MODEL})")
-    app.run(host="127.0.0.1", port=args.port, debug=False)
+    print(f"[nova] Serving on http://{args.host}:{args.port} (model: {ollama_client.OLLAMA_MODEL})")
+    app.run(host=args.host, port=args.port, debug=False)
 
 
 if __name__ == "__main__":
