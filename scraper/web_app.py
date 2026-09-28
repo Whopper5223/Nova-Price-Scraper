@@ -15,6 +15,8 @@ Usage:
 import argparse
 import asyncio
 import sys
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -30,7 +32,7 @@ if _env_file.exists():
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from scraper import ollama_client, price_lookup
+from scraper import instacart_scraper, ollama_client, price_lookup
 from scraper.ollama_client import OllamaError
 from scraper.chat_assistant import (
     CHAT_SYSTEM_PROMPT,
@@ -49,6 +51,36 @@ app = Flask(__name__, static_folder=str(Path(__file__).parent / "static"), stati
 STATE = {"history": [], "max_age_hours": price_lookup.DEFAULT_MAX_AGE_HOURS,
          "max_stores": DEFAULT_MAX_STORES, "n_results": DEFAULT_RESULTS, "force_live": False,
          "live_fallback": False, "budget": None}
+
+# Admin scrape trigger — unlisted route, not linked from static/index.html. "Hidden"
+# here just means the URL isn't published anywhere, not real auth (see /admin/scrape).
+DEFAULT_SCRAPE_STORES = ["Stop & Shop", "ALDI", "Wegmans"]
+SCRAPE_STATE = {"status": "idle", "started_at": None, "finished_at": None,
+                 "result": None, "error": None}
+_SCRAPE_LOCK = threading.Lock()
+
+
+def _run_scrape(store_filter: list[str], skip_categorize: bool) -> None:
+    """Runs on a background thread, kicked off by POST /admin/scrape — never called
+    directly from a request thread, since a full scrape can take several minutes."""
+    try:
+        result = asyncio.run(instacart_scraper.run_scraper(
+            verbose=True, store_filter=store_filter, skip_categorize=skip_categorize,
+        ))
+        stores = result.get("stores", [])
+        products = sum(s.get("product_count", 0) for s in stores)
+        errors = result.get("errors", [])
+        SCRAPE_STATE["result"] = {"stores": len(stores), "products": products, "errors": errors}
+        if products == 0:
+            SCRAPE_STATE["status"] = "error"
+            SCRAPE_STATE["error"] = errors[0] if errors else "Scrape completed but found 0 products."
+        else:
+            SCRAPE_STATE["status"] = "done"
+    except Exception as e:
+        SCRAPE_STATE["status"] = "error"
+        SCRAPE_STATE["error"] = str(e)
+    finally:
+        SCRAPE_STATE["finished_at"] = datetime.now(timezone.utc).isoformat()
 
 
 @app.get("/")
@@ -142,6 +174,25 @@ def reset():
     return jsonify({"ok": True})
 
 
+@app.route("/admin/scrape", methods=["GET", "POST"])
+def admin_scrape():
+    if request.method == "GET":
+        return jsonify(SCRAPE_STATE)
+
+    body = request.json or {}
+    stores = body.get("stores") or DEFAULT_SCRAPE_STORES
+    skip_categorize = bool(body.get("skip_categorize", False))
+
+    with _SCRAPE_LOCK:
+        if SCRAPE_STATE["status"] == "running":
+            return jsonify({"error": "A scrape is already running.", **SCRAPE_STATE}), 409
+        SCRAPE_STATE.update({"status": "running", "started_at": datetime.now(timezone.utc).isoformat(),
+                              "finished_at": None, "result": None, "error": None})
+        threading.Thread(target=_run_scrape, args=(stores, skip_categorize), daemon=True).start()
+
+    return jsonify({"status": "running", "stores": stores}), 202
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Nova Grocery Assistant — web UI")
     parser.add_argument("--model", metavar="NAME", default=None)
@@ -158,7 +209,22 @@ def main() -> None:
     parser.add_argument("--prices-file", metavar="PATH", default=None,
                          help="Use a different saved-prices JSON instead of prices_output.json "
                               "(e.g. a sample multi-store dataset for testing).")
+    parser.add_argument("--headless", action="store_true",
+                         help="Force headless Playwright for the /admin/scrape trigger and any "
+                              "live-fallback lookups — needed on a server with no display. "
+                              "Higher bot-detection risk (mirrors run_scraper.py --headless).")
     args = parser.parse_args()
+
+    if args.headless:
+        print("[nova] Playwright forced headless (higher bot-detection risk).")
+        import playwright.async_api as _pw_api
+        _original_launch = _pw_api.BrowserType.launch
+
+        async def _headless_launch(self, **kwargs):
+            kwargs["headless"] = True
+            return await _original_launch(self, **kwargs)
+
+        _pw_api.BrowserType.launch = _headless_launch
 
     if args.model:
         ollama_client.OLLAMA_MODEL = args.model
@@ -178,7 +244,7 @@ def main() -> None:
         sys.exit(1)
 
     print(f"[nova] Serving on http://{args.host}:{args.port} (model: {ollama_client.OLLAMA_MODEL})")
-    app.run(host=args.host, port=args.port, debug=False)
+    app.run(host=args.host, port=args.port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
