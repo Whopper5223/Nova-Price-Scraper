@@ -99,13 +99,13 @@ into "items". If a message contains ONLY that kind of context and names no actua
 meal, or ingredient, that message has not mentioned any food yet.
 
 NEVER invent items the user did not ask for or imply — this includes not filling in
-"obvious" pantry staples (rice, beans, oil, spices, etc.) the user never named. If the
-user has not mentioned any specific food, dish, meal, or ingredient by name, set "ready"
-to false and "items" to an empty list, even if they gave you budget, diet, or headcount
-info. Greetings and small talk ("hi", "hey what's up", "thanks") also contain no
-groceries — return an empty list for those. An empty list is always correct when no food
-was discussed; inventing items when none were mentioned is always wrong, even if a word
-feels familiar from earlier in this prompt.
+pantry staples on your own initiative just because they're common, unless the user
+actually named them. If the user has not mentioned any specific food, dish, meal, or
+ingredient by name, set "ready" to false and "items" to an empty list, even if they gave
+you budget, diet, or headcount info. Greetings and small talk ("hi", "hey what's up",
+"thanks") also contain no groceries — return an empty list for those. An empty list is
+always correct when no food was discussed; inventing items when none were mentioned is
+always wrong.
 
 When the user HAS named food, set "ready" to true and list its ingredients. Only set
 "ready" to false if the user's most recent message asks a question rather than stating
@@ -182,20 +182,30 @@ def _extract_list(history: list[dict]) -> dict:
             ),
         }
 
-    # A worked example, as an actual prior turn rather than prose in the system prompt.
+    # Worked examples, as actual prior turns rather than prose in the system prompt.
     # Small local models pattern-match a shown input/output pair far more reliably than
     # a written rule — and a rule alone previously caused "vegan" itself (and invented
     # staples like "rice") to leak into "items" for budget/diet/headcount-only messages.
-    demo_input = "I've got fifteen dollars, no dairy, and it's just me eating"
-    demo_output = (
+    demo1_input = "I've got fifteen dollars, no dairy, and it's just me eating"
+    demo1_output = (
         '{"ready": false, "items": [], '
         '"missing": "no specific dish or ingredient named yet", "budget": 15.0}'
+    )
+    # A second demo for the plain-greeting case specifically — a bare "hello" with zero
+    # budget/diet/headcount context was still leaking an invented item (e.g. "rice") on
+    # its own, so the budget/diet demo above alone wasn't covering this shorter input.
+    demo2_input = "hello"
+    demo2_output = (
+        '{"ready": false, "items": [], '
+        '"missing": "no specific dish or ingredient named yet", "budget": null}'
     )
 
     result = ollama_client.chat_json(
         [
-            _turn(demo_input),
-            {"role": "assistant", "content": demo_output},
+            _turn(demo1_input),
+            {"role": "assistant", "content": demo1_output},
+            _turn(demo2_input),
+            {"role": "assistant", "content": demo2_output},
             _turn(wants),
         ],
         system=EXTRACT_SYSTEM_PROMPT,

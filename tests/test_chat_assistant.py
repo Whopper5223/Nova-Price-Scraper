@@ -120,18 +120,37 @@ class TestExtractListOnlySendsUserText(unittest.TestCase):
         self.assertNotIn("pasta primavera", sent_content)
 
     @patch("scraper.chat_assistant.ollama_client.chat_json")
-    def test_extraction_call_includes_a_worked_example_before_the_real_turn(self, mock_chat_json):
-        # Locks in the few-shot structure: a fixed demo input/output pair goes first,
+    def test_extraction_call_includes_worked_examples_before_the_real_turn(self, mock_chat_json):
+        # Locks in the few-shot structure: two fixed demo input/output pairs go first,
         # the real request last. Prose rules alone weren't enough to stop the model
         # from copying literal words out of the system prompt (e.g. "milk", "eggs",
-        # or the diet word "vegan" itself) into "items" — a worked example fixed it.
+        # or the diet word "vegan" itself) into "items" — worked examples fixed it.
         mock_chat_json.return_value = {"ready": False, "items": [], "missing": "", "budget": None}
         _extract_list([{"role": "user", "content": "I have 20 dollars i eat vegan and theres 2 of us"}])
 
         messages = mock_chat_json.call_args[0][0]
-        self.assertEqual(len(messages), 3)
+        self.assertEqual(len(messages), 5)
         self.assertEqual(messages[1]["role"], "assistant")
+        self.assertEqual(messages[3]["role"], "assistant")
         self.assertIn("vegan", messages[-1]["content"])
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_extraction_call_includes_a_bare_greeting_demo(self, mock_chat_json):
+        # A plain "hello" with no budget/diet/headcount context was still leaking an
+        # invented item (e.g. "rice") into "items" even with the vegan/budget demo
+        # above in place — that demo's input always has *some* context to reason
+        # about, so it didn't cover the truly-empty-input case. This locks in the
+        # second demo added specifically for that gap.
+        mock_chat_json.return_value = {"ready": False, "items": [], "missing": "", "budget": None}
+        _extract_list([{"role": "user", "content": "hello"}])
+
+        messages = mock_chat_json.call_args[0][0]
+        self.assertEqual(len(messages), 5)
+        demo2_input, demo2_output = messages[2], messages[3]
+        self.assertEqual(demo2_input["role"], "user")
+        self.assertIn("hello", demo2_input["content"])
+        self.assertEqual(demo2_output["role"], "assistant")
+        self.assertIn('"items": []', demo2_output["content"])
 
 
 if __name__ == "__main__":
