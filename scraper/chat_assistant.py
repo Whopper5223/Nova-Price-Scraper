@@ -167,20 +167,36 @@ def _extract_list(history: list[dict]) -> dict:
 
     Returns {"ready": bool, "items": list[str], "missing": str, "budget": float | None}.
     """
-    # Only the user's own messages are sent — never the assistant's. If the assistant
-    # suggests a dish the user hasn't picked yet, it must not be extractable as an item;
-    # restricting the model's input to user text enforces that structurally instead of
-    # relying on it to infer whose suggestion is whose from a mixed transcript.
+    # The user's own messages are the primary signal — an assistant suggestion the user
+    # hasn't picked yet must not be extractable as an item, so the bulk of the
+    # conversation is still restricted to user text rather than trusting the model to
+    # infer whose suggestion is whose from a mixed transcript.
     wants = " | ".join(m["content"] for m in history if m["role"] == "user")
 
-    def _turn(user_wants: str) -> dict:
-        return {
-            "role": "user",
-            "content": (
-                f"Everything the user has asked for, across all their messages:\n{user_wants}\n\n"
-                "Extract the complete shopping list JSON covering ALL of it."
-            ),
-        }
+    # Exception: the ONE assistant message directly before the user's latest message,
+    # if there is one, is also surfaced separately. A plain confirmation ("yep", "sounds
+    # good") has no food words of its own — without seeing what it's confirming, that
+    # reply looks exactly like a greeting and the whole proposed list silently vanishes.
+    last_user_idx = max((i for i, m in enumerate(history) if m["role"] == "user"), default=None)
+    last_proposal = None
+    if last_user_idx and history[last_user_idx - 1]["role"] == "assistant":
+        last_proposal = history[last_user_idx - 1]["content"]
+
+    def _turn(user_wants: str, proposal: str | None = None) -> dict:
+        parts = [f"Everything the user has asked for, across all their messages:\n{user_wants}"]
+        if proposal:
+            parts.append(
+                "\nThe assistant's most recent suggestion, shown only because the user's own "
+                f"latest message above may be responding to it:\n{proposal}\n"
+                "If that latest message accepts/confirms this suggestion (e.g. \"yes\", "
+                "\"sounds good\", \"sure\", \"let's do that\"), treat every item in the "
+                "suggestion as confirmed and include it. If the latest message instead "
+                "rejects it, changes it, or picks only part of it, include ONLY what the "
+                "user's own words actually confirmed or named — never the rest of the "
+                "suggestion just because it was mentioned here."
+            )
+        parts.append("\nExtract the complete shopping list JSON covering ALL of it.")
+        return {"role": "user", "content": "\n".join(parts)}
 
     # Worked examples, as actual prior turns rather than prose in the system prompt.
     # Small local models pattern-match a shown input/output pair far more reliably than
@@ -199,6 +215,27 @@ def _extract_list(history: list[dict]) -> dict:
         '{"ready": false, "items": [], '
         '"missing": "no specific dish or ingredient named yet", "budget": null}'
     )
+    # A third demo for confirming a full proposal with a bare "sounds good" — this was
+    # the actual reported bug: the assistant proposes a complete list, the user accepts
+    # it in words with no food terms of their own, and the list came back empty because
+    # nothing surfaced the proposal being confirmed.
+    demo3_proposal = (
+        "Let's do chicken stir-fry! You'll need: chicken breast, broccoli, carrots, "
+        "soy sauce, and garlic."
+    )
+    demo3_input = "yep sounds good"
+    demo3_output = (
+        '{"ready": true, "items": ["chicken breast", "broccoli", "carrots", "soy sauce", '
+        '"garlic"], "missing": "", "budget": null}'
+    )
+    # A fourth demo for rejecting a proposal — without this, a model that just learned
+    # "confirm the suggestion" from demo 3 could start including it unconditionally.
+    demo4_proposal = demo3_proposal
+    demo4_input = "hmm, no, let's do something else, not sure what yet"
+    demo4_output = (
+        '{"ready": false, "items": [], '
+        '"missing": "no specific dish or ingredient named yet", "budget": null}'
+    )
 
     result = ollama_client.chat_json(
         [
@@ -206,7 +243,11 @@ def _extract_list(history: list[dict]) -> dict:
             {"role": "assistant", "content": demo1_output},
             _turn(demo2_input),
             {"role": "assistant", "content": demo2_output},
-            _turn(wants),
+            _turn(demo3_input, demo3_proposal),
+            {"role": "assistant", "content": demo3_output},
+            _turn(demo4_input, demo4_proposal),
+            {"role": "assistant", "content": demo4_output},
+            _turn(wants, last_proposal),
         ],
         system=EXTRACT_SYSTEM_PROMPT,
     )
