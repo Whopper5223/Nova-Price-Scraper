@@ -4,8 +4,9 @@ web_app.py
 Local browser front end for chat_assistant.py — same conversation, extraction,
 and pricing logic, just easier to click through than a terminal prompt.
 
-Single-user, single conversation in memory: this is a local testing tool, not a
-multi-tenant server. Run it, open the browser, refresh to reset.
+Each visitor gets their own conversation, tracked via a signed session cookie
+(SESSIONS, keyed by a per-visitor id) — settings like --max-stores are shared
+(CONFIG). All in memory: restarting the process clears every session.
 
 Usage:
     python -m scraper.web_app
@@ -14,6 +15,7 @@ Usage:
 
 import argparse
 import asyncio
+import secrets
 import sys
 import threading
 from datetime import datetime, timezone
@@ -30,7 +32,7 @@ if _env_file.exists():
             _k, _v = _line.split("=", 1)
             os.environ.setdefault(_k.strip(), _v.strip())
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, session
 
 from scraper import instacart_scraper, ollama_client, price_lookup
 from scraper.ollama_client import OllamaError
@@ -46,11 +48,25 @@ from scraper.chat_assistant import (
 )
 
 app = Flask(__name__, static_folder=str(Path(__file__).parent / "static"), static_url_path="")
+# Signs the session cookie. Regenerated on every process start — fine, since all
+# session state is in-memory anyway and a restart already clears everything.
+app.secret_key = secrets.token_hex(32)
 
-# Single in-memory conversation — see module docstring.
-STATE = {"history": [], "max_age_hours": price_lookup.DEFAULT_MAX_AGE_HOURS,
-         "max_stores": DEFAULT_MAX_STORES, "n_results": DEFAULT_RESULTS, "force_live": False,
-         "live_fallback": False, "budget": None}
+# Shared across every visitor — set once at startup from CLI args, never per-request.
+CONFIG = {"max_age_hours": price_lookup.DEFAULT_MAX_AGE_HOURS, "max_stores": DEFAULT_MAX_STORES,
+          "n_results": DEFAULT_RESULTS, "force_live": False, "live_fallback": False}
+
+# Per-visitor conversation state, keyed by the id in their session cookie. No
+# cleanup/expiry — acceptable for a demo, would need attention for long-lived use.
+SESSIONS: dict[str, dict] = {}
+
+
+def _get_session() -> dict:
+    sid = session.get("sid")
+    if not sid:
+        sid = secrets.token_hex(16)
+        session["sid"] = sid
+    return SESSIONS.setdefault(sid, {"history": [], "budget": None})
 
 # Admin scrape trigger — unlisted route, not linked from static/index.html. "Hidden"
 # here just means the URL isn't published anywhere, not real auth (see /admin/scrape).
@@ -98,22 +114,23 @@ def status():
 
 @app.post("/api/chat")
 def chat():
-    message = (request.json or {}).get("message", "").strip()
+    message = (request.get_json(silent=True) or {}).get("message", "").strip()
     if not message:
         return jsonify({"error": "empty message"}), 400
 
-    STATE["history"].append({"role": "user", "content": message})
+    sess = _get_session()
+    sess["history"].append({"role": "user", "content": message})
 
     try:
-        reply = ollama_client.chat(STATE["history"], system=CHAT_SYSTEM_PROMPT, temperature=0.7)
+        reply = ollama_client.chat(sess["history"], system=CHAT_SYSTEM_PROMPT, temperature=0.7)
     except OllamaError as e:
-        STATE["history"].pop()
+        sess["history"].pop()
         return jsonify({"error": str(e)}), 503
 
-    STATE["history"].append({"role": "assistant", "content": reply})
+    sess["history"].append({"role": "assistant", "content": reply})
 
-    extracted = _extract_list(STATE["history"])
-    STATE["budget"] = extracted["budget"]
+    extracted = _extract_list(sess["history"])
+    sess["budget"] = extracted["budget"]
     return jsonify({
         "reply": reply,
         "ready": extracted["ready"],
@@ -125,22 +142,23 @@ def chat():
 
 @app.post("/api/price")
 def price():
-    body = request.json or {}
+    body = request.get_json(silent=True) or {}
+    sess = _get_session()
     items = [str(i).strip().lower() for i in body.get("items", []) if str(i).strip()]
-    budget = body.get("budget", STATE.get("budget"))
+    budget = body.get("budget", sess.get("budget"))
     if not items:
         return jsonify({"error": "no items"}), 400
 
-    if STATE["force_live"]:
+    if CONFIG["force_live"]:
         saved_findings, unresolved = {}, list(items)
     else:
-        saved_findings, unresolved = _price_from_saved(items, STATE["max_age_hours"])
+        saved_findings, unresolved = _price_from_saved(items, CONFIG["max_age_hours"])
 
     live_findings = {}
     live_error = None
-    if unresolved and (STATE["force_live"] or STATE["live_fallback"]):
+    if unresolved and (CONFIG["force_live"] or CONFIG["live_fallback"]):
         try:
-            live_findings = asyncio.run(_price_live(unresolved, STATE["max_stores"], STATE["n_results"]))
+            live_findings = asyncio.run(_price_live(unresolved, CONFIG["max_stores"], CONFIG["n_results"]))
         except Exception as e:
             live_error = str(e)
     elif unresolved:
@@ -150,12 +168,12 @@ def price():
     findings = {**saved_findings, **live_findings}
     missing = [i for i in items if i not in findings]
 
-    request_text = next((m["content"] for m in STATE["history"] if m["role"] == "user"), "")
+    request_text = next((m["content"] for m in sess["history"] if m["role"] == "user"), "")
     summary = _summarize(request_text, findings, missing, items, budget)
     store_totals = _store_basket_totals(findings, items)
 
-    STATE["history"].clear()
-    STATE["budget"] = None
+    sess["history"].clear()
+    sess["budget"] = None
 
     return jsonify({
         "findings": findings,
@@ -169,8 +187,9 @@ def price():
 
 @app.post("/api/reset")
 def reset():
-    STATE["history"].clear()
-    STATE["budget"] = None
+    sess = _get_session()
+    sess["history"].clear()
+    sess["budget"] = None
     return jsonify({"ok": True})
 
 
@@ -179,7 +198,7 @@ def admin_scrape():
     if request.method == "GET":
         return jsonify(SCRAPE_STATE)
 
-    body = request.json or {}
+    body = request.get_json(silent=True) or {}
     stores = body.get("stores") or DEFAULT_SCRAPE_STORES
     skip_categorize = bool(body.get("skip_categorize", False))
 
@@ -230,11 +249,11 @@ def main() -> None:
         ollama_client.OLLAMA_MODEL = args.model
     if args.prices_file:
         price_lookup.set_prices_path(Path(args.prices_file))
-    STATE["max_age_hours"] = args.max_age_hours
-    STATE["max_stores"] = args.max_stores
-    STATE["n_results"] = args.results
-    STATE["force_live"] = args.live
-    STATE["live_fallback"] = args.live_fallback
+    CONFIG["max_age_hours"] = args.max_age_hours
+    CONFIG["max_stores"] = args.max_stores
+    CONFIG["n_results"] = args.results
+    CONFIG["force_live"] = args.live
+    CONFIG["live_fallback"] = args.live_fallback
 
     warnings = ollama_client.check_ready()
     if warnings:
