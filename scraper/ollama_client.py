@@ -123,9 +123,28 @@ def chat(
         raise OllamaError(_hint(f"Ollama request failed: {e}")) from e
 
     try:
-        return resp.json()["message"]["content"].strip()
+        data = resp.json()
+        content = data["message"]["content"].strip()
     except (ValueError, KeyError) as e:
         raise OllamaError(f"Unexpected response shape from Ollama: {resp.text[:400]}") from e
+
+    # Ollama returns exact timing/token-count breakdowns even for non-streamed
+    # responses — surfacing them turns "it's slow" into actual numbers instead of
+    # guesswork (load = cold model load, prompt_eval = reading the input, eval =
+    # generating the output; all in seconds here, converted from nanoseconds).
+    if any(k in data for k in ("total_duration", "load_duration", "eval_duration")):
+        ns = 1_000_000_000
+        print(
+            f"[ollama] {payload['model']} — "
+            f"load={data.get('load_duration', 0) / ns:.1f}s  "
+            f"prompt_eval={data.get('prompt_eval_duration', 0) / ns:.1f}s "
+            f"({data.get('prompt_eval_count', 0)} tok)  "
+            f"eval={data.get('eval_duration', 0) / ns:.1f}s "
+            f"({data.get('eval_count', 0)} tok)  "
+            f"total={data.get('total_duration', 0) / ns:.1f}s"
+        )
+
+    return content
 
 
 def embed(text: str, model: str = "nomic-embed-text", timeout: int = DEFAULT_TIMEOUT) -> list[float]:
