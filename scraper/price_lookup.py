@@ -54,13 +54,26 @@ def load_latest(path: Path | None = None) -> dict | None:
         return None
 
 
+# Departments that never contain real groceries but whose products often reuse
+# a food word as flavor/scent branding — e.g. "Milk & Honey" hand soap, "Turkey
+# & Cheese" cat food. Word-boundary matching alone can't tell "flavor name"
+# from "actual grocery item", so a bare query like "milk" or "cheese" would
+# otherwise match these ahead of (and cheaper than) the real product. Excluded
+# up front rather than relying on relevance-scoring after the fact.
+_NON_GROCERY_DEPARTMENTS = {
+    "household", "pets", "cat", "dog", "personal-care", "health-care",
+    "baby", "kitchen-supplies", "office-craft", "laundry", "party-gifts", "floral",
+}
+
+
 def query_prices(term: str, limit: int = 20, path: Path | None = None) -> list[dict]:
     """
     Every saved product matching `term`, cheapest first.
 
     Matching is the same word-boundary+stemming rule search_products() uses on
     live pages (product_embeddings.matches_query), so cached and live lookups
-    agree on what counts as a hit.
+    agree on what counts as a hit. Non-grocery departments (see
+    _NON_GROCERY_DEPARTMENTS) are excluded before matching.
     Each row: {store_name, store_url, name, price, unit, department}.
     """
     data = load_latest(path)
@@ -70,11 +83,13 @@ def query_prices(term: str, limit: int = 20, path: Path | None = None) -> list[d
     matches = []
     for store in data.get("stores", []):
         for product in store.get("products", []):
+            department = product.get("department")
+            if department in _NON_GROCERY_DEPARTMENTS:
+                continue
             name = product.get("name") or ""
             price = product.get("price")
             if price is None or not product_embeddings.matches_query(name, term):
                 continue
-            department = product.get("department")
             matches.append({
                 "store_name": store.get("name"),
                 "store_url": store.get("url"),

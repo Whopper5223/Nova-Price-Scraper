@@ -107,5 +107,62 @@ class TestQueryPricesLexicalOnly(unittest.TestCase):
         self.assertIn("snap_eligible", by_name["Salted Butter"])
 
 
+_NON_GROCERY_FIXTURE = {
+    "scraped_at": "2026-01-01T00:00:00+00:00",
+    "location": "Test City",
+    "stores": [
+        {
+            "name": "Test Store",
+            "url": "https://example.com",
+            "product_count": 4,
+            "products": [
+                # Real bug, found live: a bare "milk"/"cheese" query lexically
+                # matches non-grocery products that reuse the word as flavor
+                # branding, and (being cheap) wins over the real grocery item.
+                {"name": "CareOne Liquid Hand Soap Milk & Honey Pump", "price": 1.39,
+                 "unit": None, "department": "personal-care"},
+                {"name": "Nature's Promise Whole Milk", "price": 3.99,
+                 "unit": None, "department": "dairy"},
+                {"name": "Purina Friskies Wet Cat Food, Turkey & Cheese Dinner", "price": 0.99,
+                 "unit": None, "department": "cat"},
+                {"name": "Store Brand Cheddar Cheese Block", "price": 4.49,
+                 "unit": None, "department": "dairy"},
+            ],
+        }
+    ],
+}
+
+
+class TestNonGroceryDepartmentsExcluded(unittest.TestCase):
+    """Regression test for the hand-soap-as-milk / cat-food-as-cheese bug."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        fixture_path = Path(self._tmpdir.name) / "prices.json"
+        fixture_path.write_text(json.dumps(_NON_GROCERY_FIXTURE))
+        self.fixture_path = fixture_path
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def test_milk_query_does_not_match_hand_soap(self):
+        results = price_lookup.query_prices("milk", path=self.fixture_path)
+        names = [r["name"] for r in results]
+        self.assertNotIn("CareOne Liquid Hand Soap Milk & Honey Pump", names)
+        self.assertIn("Nature's Promise Whole Milk", names)
+
+    def test_cheese_query_does_not_match_cat_food(self):
+        results = price_lookup.query_prices("cheese", path=self.fixture_path)
+        names = [r["name"] for r in results]
+        self.assertNotIn("Purina Friskies Wet Cat Food, Turkey & Cheese Dinner", names)
+        self.assertIn("Store Brand Cheddar Cheese Block", names)
+
+    def test_cheapest_by_store_returns_the_real_grocery_item(self):
+        # Before the fix, this would have returned the $1.39 hand soap --
+        # cheaper, but not milk.
+        results = price_lookup.cheapest_by_store("milk", path=self.fixture_path)
+        self.assertEqual([r["name"] for r in results], ["Nature's Promise Whole Milk"])
+
+
 if __name__ == "__main__":
     unittest.main()
