@@ -96,7 +96,9 @@ def _batches(rows: list[dict], size: int = BATCH_SIZE):
         yield rows[i : i + size]
 
 
-def _judge_batch(recipe_name: str, all_ingredients: list[str], batch: list[dict]) -> list[int | None]:
+def _judge_batch(
+    recipe_name: str, all_ingredients: list[str], batch: list[dict], model: str | None = None,
+) -> list[int | None]:
     result = ollama_client.chat_json(
         [
             {"role": "user", "content": _listing(_DEMO_RECIPE_NAME, _DEMO_ALL_INGREDIENTS, _DEMO_BATCH)},
@@ -104,6 +106,7 @@ def _judge_batch(recipe_name: str, all_ingredients: list[str], batch: list[dict]
             {"role": "user", "content": _listing(recipe_name, all_ingredients, batch)},
         ],
         system=PICK_BEST_MATCH_SYSTEM_PROMPT,
+        model=model,
     )
 
     def _cheapest(item) -> int | None:
@@ -143,7 +146,9 @@ def _judge_batch(recipe_name: str, all_ingredients: list[str], batch: list[dict]
     return picks
 
 
-def pick_best_matches(recipe_name: str, all_ingredients: list[str], batch: list[dict]) -> list[int | None]:
+def pick_best_matches(
+    recipe_name: str, all_ingredients: list[str], batch: list[dict], model: str | None = None,
+) -> list[int | None]:
     """
     Pick the best-matching candidate for each ingredient in `batch`, using the
     recipe name and full ingredient list as disambiguating context.
@@ -151,6 +156,9 @@ def pick_best_matches(recipe_name: str, all_ingredients: list[str], batch: list[
     batch is a list of {"ingredient": str, "candidates": [product dict, ...]}.
     Batches BATCH_SIZE ingredients per LLM call (a recipe's own ingredient list
     is always far smaller than that in practice).
+
+    model overrides the default Ollama model for this call (e.g. a smaller,
+    faster model for a judge call that's less demanding than full chat).
 
     Returns one entry per item in `batch`, aligned by position: an int index
     into THAT item's own "candidates" list, or None — and the two are NOT
@@ -168,5 +176,5 @@ def pick_best_matches(recipe_name: str, all_ingredients: list[str], batch: list[
     """
     picks: list[int | None] = []
     for chunk in _batches(batch):
-        picks.extend(_judge_batch(recipe_name, all_ingredients, chunk))
+        picks.extend(_judge_batch(recipe_name, all_ingredients, chunk, model=model))
     return picks

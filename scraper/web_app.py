@@ -149,10 +149,12 @@ def price():
     if not items:
         return jsonify({"error": "no items"}), 400
 
+    request_text = next((m["content"] for m in sess["history"] if m["role"] == "user"), "")
+
     if CONFIG["force_live"]:
         saved_findings, unresolved = {}, list(items)
     else:
-        saved_findings, unresolved = _price_from_saved(items, CONFIG["max_age_hours"])
+        saved_findings, unresolved = _price_from_saved(items, CONFIG["max_age_hours"], context=request_text)
 
     live_findings = {}
     live_error = None
@@ -168,7 +170,6 @@ def price():
     findings = {**saved_findings, **live_findings}
     missing = [i for i in items if i not in findings]
 
-    request_text = next((m["content"] for m in sess["history"] if m["role"] == "user"), "")
     summary = _summarize(request_text, findings, missing, items, budget)
     store_totals = _store_basket_totals(findings, items)
 

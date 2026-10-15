@@ -38,12 +38,19 @@ if _env_file.exists():
             _k, _v = _line.split("=", 1)
             os.environ.setdefault(_k.strip(), _v.strip())
 
-from scraper import ollama_client, price_lookup
+from scraper import ollama_client, price_lookup, product_matcher
 from scraper.ollama_client import OllamaError
 from scraper.snap_eligibility import is_snap_eligible
 
 DEFAULT_MAX_STORES = 4
 DEFAULT_RESULTS = 5
+
+# Stage 3 judge model for disambiguating same-word-different-item matches
+# (e.g. "butter" vs "butter cookies") that department filtering can't catch,
+# since both are legitimately groceries. Deliberately smaller/faster than the
+# main chat model (OLLAMA_MODEL) -- this runs once per price lookup, on top of
+# the chat turn's own two model calls, so it shouldn't also be the slow model.
+JUDGE_MODEL = "llama3.2"
 
 _URL_RE = re.compile(r"https?://\S+")
 
@@ -292,9 +299,24 @@ def _extract_list(history: list[dict]) -> dict:
 # Pricing a confirmed list
 # ---------------------------------------------------------------------------
 
-def _price_from_saved(items: list[str], max_age_hours: int) -> tuple[dict, list[str]]:
+# How many unique (by name) lexical candidates the judge sees per item.
+# Plenty for disambiguating "butter" vs "butter cookies" without making the
+# prompt huge -- a real grocery item rarely has more distinct plausible names.
+JUDGE_CANDIDATES_PER_ITEM = 8
+
+
+def _price_from_saved(items: list[str], max_age_hours: int, context: str = "") -> tuple[dict, list[str]]:
     """
     Price what we can from prices_output.json.
+
+    Department filtering (price_lookup._NON_GROCERY_DEPARTMENTS) already keeps
+    non-grocery products (soap, pet food, etc.) out of the running. What's left
+    can still have same-word-different-item ambiguity WITHIN groceries -- e.g.
+    "butter" lexically matching both "Salted Butter" and "Butter Cookies",
+    both genuinely food. The Stage 3 judge (product_matcher), already built
+    for recipe_scraper.py, picks the right one using `context` (e.g. what the
+    user said they're making) the same way it uses a recipe name there.
+
     Returns (findings, unresolved) — unresolved items need a live lookup.
     """
     if price_lookup.is_stale(max_age_hours=max_age_hours):
@@ -303,11 +325,44 @@ def _price_from_saved(items: list[str], max_age_hours: int) -> tuple[dict, list[
         print(f"[nova] Skipping saved prices ({why}).")
         return {}, list(items)
 
+    # All matches per item, gathered once and reused both for the judge's
+    # candidate list and (after judging) for the chosen product's own pricing.
+    all_rows = {item: price_lookup.query_prices(item, limit=0) for item in items}
+
+    batch = []
+    item_candidate_names: dict[str, list[str]] = {}
+    for item in items:
+        names: list[str] = []
+        for row in all_rows[item]:
+            if row["name"] not in names:
+                names.append(row["name"])
+            if len(names) >= JUDGE_CANDIDATES_PER_ITEM:
+                break
+        item_candidate_names[item] = names
+        candidates = [
+            next(r for r in all_rows[item] if r["name"] == name)  # cheapest instance of this name
+            for name in names
+        ]
+        batch.append({
+            "ingredient": item,
+            "candidates": [{"name": c["name"], "price": c["price"], "unit": c["unit"]} for c in candidates],
+        })
+
+    picks = (
+        product_matcher.pick_best_matches(context or "a grocery shopping list", items, batch, model=JUDGE_MODEL)
+        if any(item_candidate_names[item] for item in items)
+        else [None] * len(items)
+    )
+
     findings: dict[str, list[dict]] = {}
     unresolved: list[str] = []
-
-    for item in items:
-        rows = price_lookup.cheapest_by_store(item)
+    for item, pick in zip(items, picks):
+        names = item_candidate_names[item]
+        if pick is None or not names:
+            unresolved.append(item)
+            continue
+        chosen_name = names[pick]
+        rows = price_lookup.cheapest_per_store([r for r in all_rows[item] if r["name"] == chosen_name])
         if rows:
             findings[item] = rows
         else:
@@ -585,10 +640,12 @@ async def _run_chat(max_age_hours: int, max_stores: int, n_results: int, force_l
             print()
             continue
 
+        request = next((m["content"] for m in history if m["role"] == "user"), "")
+
         if force_live:
             saved_findings, unresolved = {}, list(confirmed)
         else:
-            saved_findings, unresolved = _price_from_saved(confirmed, max_age_hours)
+            saved_findings, unresolved = _price_from_saved(confirmed, max_age_hours, context=request)
 
         live_findings = {}
         if unresolved and (force_live or live_fallback):
@@ -605,7 +662,6 @@ async def _run_chat(max_age_hours: int, max_stores: int, n_results: int, force_l
 
         _print_findings(findings, missing)
 
-        request = next((m["content"] for m in history if m["role"] == "user"), "")
         print("\nnova > " + _summarize(request, findings, missing, confirmed, extracted["budget"]) + "\n")
 
         # Fresh slate so the next request isn't priced against this one's context.

@@ -104,14 +104,19 @@ def query_prices(term: str, limit: int = 20, path: Path | None = None) -> list[d
     return matches[:limit] if limit > 0 else matches
 
 
-def cheapest_by_store(term: str, path: Path | None = None) -> list[dict]:
-    """One cheapest match per store for `term`, cheapest store first."""
+def cheapest_per_store(rows: list[dict]) -> list[dict]:
+    """Collapse `rows` (any order) to one cheapest entry per store."""
     best: dict[str, dict] = {}
-    for row in query_prices(term, limit=0, path=path):
+    for row in sorted(rows, key=lambda p: p["price"]):
         store = row["store_name"]
-        if store not in best:  # rows already sorted cheapest-first
+        if store not in best:
             best[store] = row
     return sorted(best.values(), key=lambda p: p["price"])
+
+
+def cheapest_by_store(term: str, path: Path | None = None) -> list[dict]:
+    """One cheapest match per store for `term`, cheapest store first."""
+    return cheapest_per_store(query_prices(term, limit=0, path=path))
 
 
 def data_age(path: Path | None = None) -> timedelta | None:
