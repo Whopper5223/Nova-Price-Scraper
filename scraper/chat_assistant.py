@@ -149,12 +149,9 @@ Rules:
   price row. Only say "no price found" / "no results" for an item if it appears in
   "items_with_no_results", never for an item that is a key in "priced_items".
 - Mention the store name and the specific product name behind each price.
-- Each row has a snap_eligible field: true (SNAP/EBT eligible), false (not eligible —
-  e.g. alcohol, hot prepared food, household goods, supplements), or null (uncertain,
-  user should double-check at checkout). Flag any item that is false or null so an
-  EBT shopper isn't surprised at checkout.
-- Note that whether a store or order actually accepts EBT payment depends on that
-  retailer, not on this list — this only tells you which items would qualify.
+- Each row has a snap_eligible field. Do NOT mention it, flag it, or bring up SNAP/EBT
+  eligibility at all in your reply right now -- this is temporarily disabled, ignore
+  that field entirely.
 - You are also given "store_totals": one entry per store, with the total cost of
   buying everything there in one trip (covers_all_items = true means that store has
   every item), and which items (if any) that store is missing. Recommend the cheapest

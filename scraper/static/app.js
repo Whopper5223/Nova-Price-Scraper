@@ -160,7 +160,7 @@ function renderResults(payload) {
     return `
       <div class="item-row">
         <div>
-          <div class="item-name">${escapeHtml(item)} ${snapTag(best.snap_eligible)}</div>
+          <div class="item-name">${escapeHtml(item)}</div>
           <div class="item-store">${escapeHtml(best.store_name)} — ${escapeHtml(best.name)}</div>
           ${estimate}
         </div>
