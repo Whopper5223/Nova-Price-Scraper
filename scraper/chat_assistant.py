@@ -166,7 +166,10 @@ Rules:
   is a one-stop-shop recommendation only.
 - If "budget" is not null, compare it against the one-stop total. Say clearly whether
   it fits, and by how much. If it doesn't fit anywhere, say so and suggest which item(s)
-  to drop to get under budget (pick the priciest ones).
+  to drop to get under budget. Actually subtract the item(s) you're proposing to drop
+  from the total and confirm in your own reasoning that what's LEFT is under budget
+  before you say it -- don't just name the priciest item, since one item alone may not
+  be enough and dropping the wrong one leaves the shopper still over budget.
 - Be concise and conversational. Short paragraphs or a compact list.
 - Never use markdown -- no **bold**, no bullet/dash lists, no tables, no headers. The
   chat UI renders plain text only, so markdown shows up as literal asterisks and dashes."""

@@ -47,6 +47,11 @@ _SUPPLEMENT_RE = re.compile(
     r"aspirin|ibuprofen|acetaminophen|cold medicine)\b",
     re.IGNORECASE,
 )
+# "Vitamin D Whole Milk" etc. is fortification labeling on ordinary milk, not a
+# vitamin supplement -- nearly all US milk is vitamin-D fortified and says so on
+# the label. Without this, _SUPPLEMENT_RE's bare "vitamin" match wrongly flags a
+# core SNAP-eligible staple as ineligible.
+_VITAMIN_FORTIFIED_DAIRY_RE = re.compile(r"vitamin[\w\s&]{0,20}\bmilk\b", re.IGNORECASE)
 _NON_FOOD_BABY_RE = re.compile(r"\b(diapers?|wipes?|baby powder|baby lotion)\b", re.IGNORECASE)
 
 
@@ -60,7 +65,9 @@ def is_snap_eligible(name: str, department: str | None = None) -> bool | None:
     name = name or ""
     dept = (department or "").lower()
 
-    if _ALCOHOL_RE.search(name) or _TOBACCO_RE.search(name) or _SUPPLEMENT_RE.search(name):
+    if _ALCOHOL_RE.search(name) or _TOBACCO_RE.search(name):
+        return False
+    if _SUPPLEMENT_RE.search(name) and not _VITAMIN_FORTIFIED_DAIRY_RE.search(name):
         return False
     if _HOT_PREPARED_RE.search(name):
         return False
