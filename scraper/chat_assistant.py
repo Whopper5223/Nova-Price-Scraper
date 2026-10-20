@@ -160,7 +160,9 @@ Rules:
 - If "budget" is not null, compare it against the one-stop total. Say clearly whether
   it fits, and by how much. If it doesn't fit anywhere, say so and suggest which item(s)
   to drop to get under budget (pick the priciest ones).
-- Be concise and conversational. Short paragraphs or a compact list. No markdown tables."""
+- Be concise and conversational. Short paragraphs or a compact list.
+- Never use markdown -- no **bold**, no bullet/dash lists, no tables, no headers. The
+  chat UI renders plain text only, so markdown shows up as literal asterisks and dashes."""
 
 
 # ---------------------------------------------------------------------------
