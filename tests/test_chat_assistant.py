@@ -232,7 +232,7 @@ class TestExtractListConfirmationAgainstRealModel(unittest.TestCase):
         self.assertEqual(result["items"], [])
 
 
-_BUTTER_FIXTURE = {
+_CHEESE_FIXTURE = {
     "scraped_at": "2026-01-01T00:00:00+00:00",
     "location": "Test City",
     "stores": [
@@ -241,10 +241,13 @@ _BUTTER_FIXTURE = {
             "url": "https://example.com",
             "product_count": 2,
             "products": [
-                # Both genuinely food, so department filtering can't tell them
-                # apart -- this is exactly what the Stage 3 judge is for.
-                {"name": "Butter Cookies", "price": 2.50, "unit": None, "department": "bakery"},
-                {"name": "Salted Butter", "price": 4.00, "unit": None, "department": "dairy"},
+                # Both genuinely cheese, same department, so department+keyword
+                # filtering can't tell them apart -- this is exactly what the
+                # Stage 3 judge is for. (Dairy, not bakery -- Cheese/Milk/Bread/
+                # Produce/Beverages are the only categories query_prices() keeps,
+                # since those are the only ones with real markup data behind them.)
+                {"name": "Cheese Dip", "price": 2.50, "unit": None, "department": "dairy"},
+                {"name": "Sharp Cheddar Cheese", "price": 4.00, "unit": None, "department": "dairy"},
             ],
         }
     ],
@@ -255,7 +258,7 @@ class TestPriceFromSavedUsesJudge(unittest.TestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
         fixture_path = Path(self._tmpdir.name) / "prices.json"
-        fixture_path.write_text(json.dumps(_BUTTER_FIXTURE))
+        fixture_path.write_text(json.dumps(_CHEESE_FIXTURE))
         price_lookup.set_prices_path(fixture_path)
 
     def tearDown(self):
@@ -263,45 +266,47 @@ class TestPriceFromSavedUsesJudge(unittest.TestCase):
         self._tmpdir.cleanup()
 
     @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
-    def test_judge_picks_the_real_grocery_item_not_the_cheaper_cookie(self, mock_pick):
-        # "Salted Butter" is candidate index 1 in cheapest-first order (Butter
-        # Cookies at $2.50 comes first) -- the judge says so explicitly here;
-        # the real disambiguation judgment is covered by the live test below.
+    def test_judge_picks_the_real_grocery_item_not_the_cheaper_dip(self, mock_pick):
+        # "Sharp Cheddar Cheese" is candidate index 1 in cheapest-first order
+        # (Cheese Dip at $2.50 comes first) -- the judge says so explicitly
+        # here; the real disambiguation judgment is covered by the live test
+        # below.
         mock_pick.return_value = [1]
 
-        findings, unresolved = _price_from_saved(["butter"], max_age_hours=999999, context="dinner")
+        findings, unresolved = _price_from_saved(["cheese"], max_age_hours=999999, context="dinner")
 
         self.assertEqual(unresolved, [])
-        self.assertEqual(findings["butter"][0]["name"], "Salted Butter")
+        self.assertEqual(findings["cheese"][0]["name"], "Sharp Cheddar Cheese")
         # Context and the item list both reach the judge, not just the term.
         args, kwargs = mock_pick.call_args
         self.assertEqual(args[0], "dinner")
-        self.assertEqual(args[1], ["butter"])
+        self.assertEqual(args[1], ["cheese"])
 
     @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
     def test_judge_saying_no_good_match_marks_item_unresolved(self, mock_pick):
         mock_pick.return_value = [None]
 
-        findings, unresolved = _price_from_saved(["butter"], max_age_hours=999999)
+        findings, unresolved = _price_from_saved(["cheese"], max_age_hours=999999)
 
         self.assertEqual(findings, {})
-        self.assertEqual(unresolved, ["butter"])
+        self.assertEqual(unresolved, ["cheese"])
 
     def test_stale_data_skips_the_judge_call_entirely(self):
         # Staleness is checked before anything else -- no candidates gathered,
         # no judge call made, same as before this change.
-        findings, unresolved = _price_from_saved(["butter"], max_age_hours=0)
+        findings, unresolved = _price_from_saved(["cheese"], max_age_hours=0)
         self.assertEqual(findings, {})
-        self.assertEqual(unresolved, ["butter"])
+        self.assertEqual(unresolved, ["cheese"])
 
 
 class TestPriceFromSavedJudgeAgainstRealModel(unittest.TestCase):
     """
     Live test against the real judge model (llama3.2) -- the actual
-    disambiguation judgment (is this a butter-cookie or real butter) is
-    exactly the kind of call a mock can't verify. Skipped if the model isn't
-    pulled on this machine (it's a separate, smaller model from the main
-    chat model, not guaranteed to be present everywhere this suite runs).
+    disambiguation judgment (is this a cheese dip or a real block of cheese)
+    is exactly the kind of call a mock can't verify. Skipped if the model
+    isn't pulled on this machine (it's a separate, smaller model from the
+    main chat model, not guaranteed to be present everywhere this suite
+    runs).
     """
 
     @classmethod
@@ -316,19 +321,19 @@ class TestPriceFromSavedJudgeAgainstRealModel(unittest.TestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
         fixture_path = Path(self._tmpdir.name) / "prices.json"
-        fixture_path.write_text(json.dumps(_BUTTER_FIXTURE))
+        fixture_path.write_text(json.dumps(_CHEESE_FIXTURE))
         price_lookup.set_prices_path(fixture_path)
 
     def tearDown(self):
         price_lookup.set_prices_path(None)
         self._tmpdir.cleanup()
 
-    def test_butter_for_cooking_does_not_return_butter_cookies(self):
+    def test_cheese_for_sandwiches_does_not_return_cheese_dip(self):
         findings, unresolved = _price_from_saved(
-            ["butter"], max_age_hours=999999, context="dinner, need butter for mashed potatoes",
+            ["cheese"], max_age_hours=999999, context="dinner, need cheese for grilled cheese sandwiches",
         )
         self.assertEqual(unresolved, [])
-        self.assertEqual(findings["butter"][0]["name"], "Salted Butter")
+        self.assertEqual(findings["cheese"][0]["name"], "Sharp Cheddar Cheese")
 
 
 if __name__ == "__main__":

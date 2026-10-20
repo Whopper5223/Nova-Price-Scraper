@@ -156,16 +156,14 @@ def price():
     else:
         saved_findings, unresolved = _price_from_saved(items, CONFIG["max_age_hours"], context=request_text)
 
+    # Live Instacart fallback disabled for the 5-category demo: it searches
+    # Instacart directly and isn't restricted to Cheese/Milk/Bread/Produce/
+    # Beverages, so it could return a price with no markup data behind it.
+    # Re-enable by restoring the asyncio.run(_price_live(...)) call below.
     live_findings = {}
     live_error = None
-    if unresolved and (CONFIG["force_live"] or CONFIG["live_fallback"]):
-        try:
-            live_findings = asyncio.run(_price_live(unresolved, CONFIG["max_stores"], CONFIG["n_results"]))
-        except Exception as e:
-            live_error = str(e)
-    elif unresolved:
-        live_error = (f"{len(unresolved)} item(s) not in saved prices — live lookup is off by "
-                      f"default (start with --live-fallback to enable it).")
+    if unresolved:
+        live_error = f"{len(unresolved)} item(s) not in saved prices — live lookup is disabled."
 
     findings = {**saved_findings, **live_findings}
     missing = [i for i in items if i not in findings]

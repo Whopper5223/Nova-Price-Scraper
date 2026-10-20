@@ -66,10 +66,6 @@ Keep grocery-list chat to a few sentences. When someone asks a real nutrition or
 safety question, answer it in 2-3 short paragraphs at most — don't pad it, and don't
 turn it into an exhaustive breakdown.
 
-Never use markdown formatting — no **bold**, no bullet lists, no headers. This is a
-plain-text chat window; anything other than normal prose shows up on screen as literal
-asterisks and dashes, not formatting.
-
 You are not a substitute for a licensed healthcare provider — say so plainly whenever
 someone describes a medical condition (diabetes, heart disease, high blood pressure,
 etc.), while still giving generally sound, evidence-based guidance.
@@ -647,15 +643,13 @@ async def _run_chat(max_age_hours: int, max_stores: int, n_results: int, force_l
         else:
             saved_findings, unresolved = _price_from_saved(confirmed, max_age_hours, context=request)
 
+        # Live Instacart fallback disabled for the 5-category demo: it searches
+        # Instacart directly and isn't restricted to Cheese/Milk/Bread/Produce/
+        # Beverages, so it could return a price with no markup data behind it.
+        # Re-enable by restoring the `await _price_live(...)` call below.
         live_findings = {}
-        if unresolved and (force_live or live_fallback):
-            try:
-                live_findings = await _price_live(unresolved, max_stores, n_results)
-            except Exception as e:
-                print(f"[nova] Live lookup failed: {e}")
-        elif unresolved:
-            print(f"[nova] {len(unresolved)} item(s) not in saved prices — "
-                  f"skipping live lookup (pass --live-fallback to enable it).")
+        if unresolved:
+            print(f"[nova] {len(unresolved)} item(s) not in saved prices — live lookup is disabled.")
 
         findings = {**saved_findings, **live_findings}
         missing = [i for i in confirmed if i not in findings]

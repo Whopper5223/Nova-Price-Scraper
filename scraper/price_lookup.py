@@ -19,7 +19,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from scraper import product_embeddings
+from scraper import markup_data, product_embeddings
 from scraper.snap_eligibility import is_snap_eligible
 
 # Deliberately does not import scraper.core: that pulls in Playwright, and reading
@@ -74,7 +74,15 @@ def query_prices(term: str, limit: int = 20, path: Path | None = None) -> list[d
     live pages (product_embeddings.matches_query), so cached and live lookups
     agree on what counts as a hit. Non-grocery departments (see
     _NON_GROCERY_DEPARTMENTS) are excluded before matching.
-    Each row: {store_name, store_url, name, price, unit, department}.
+
+    Results are further restricted to markup_data.CATEGORIES (Cheese, Milk,
+    Bread, Produce, Beverages) -- the only categories with real in-store
+    markup data behind them. A product outside those 5 is dropped rather
+    than shown with an un-adjusted Instacart price next to ones that are
+    markup-adjusted.
+
+    Each row: {store_name, store_url, name, price, unit, department,
+    category, estimated_real_price}.
     """
     data = load_latest(path)
     if not data:
@@ -82,6 +90,7 @@ def query_prices(term: str, limit: int = 20, path: Path | None = None) -> list[d
 
     matches = []
     for store in data.get("stores", []):
+        store_name = store.get("name")
         for product in store.get("products", []):
             department = product.get("department")
             if department in _NON_GROCERY_DEPARTMENTS:
@@ -90,13 +99,18 @@ def query_prices(term: str, limit: int = 20, path: Path | None = None) -> list[d
             price = product.get("price")
             if price is None or not product_embeddings.matches_query(name, term):
                 continue
+            category = markup_data.classify(name, department)
+            if category is None:
+                continue
             matches.append({
-                "store_name": store.get("name"),
+                "store_name": store_name,
                 "store_url": store.get("url"),
                 "name": name,
                 "price": price,
                 "unit": product.get("unit"),
                 "department": department,
+                "category": category,
+                "estimated_real_price": markup_data.estimate_real_price(price, store_name, category),
                 "snap_eligible": is_snap_eligible(name, department),
             })
 

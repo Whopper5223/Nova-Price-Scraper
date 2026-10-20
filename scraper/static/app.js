@@ -19,12 +19,41 @@ function escapeHtml(value) {
   return div.innerHTML;
 }
 
+// Minimal, safe markdown rendering for model replies. Escapes the raw text
+// FIRST (same rule as every other untrusted string in this file), then
+// applies only the two markdown features the model actually uses -- bold and
+// bullet lists -- on top of the already-escaped string. Never treats raw
+// text as HTML.
+function renderMarkdown(text) {
+  const escaped = escapeHtml(text);
+  const withBold = escaped.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+  const htmlLines = [];
+  let inList = false;
+  for (const line of withBold.split("\n")) {
+    const bullet = line.match(/^-\s+(.*)/);
+    if (bullet) {
+      if (!inList) {
+        htmlLines.push("<ul>");
+        inList = true;
+      }
+      htmlLines.push(`<li>${bullet[1]}</li>`);
+      continue;
+    }
+    if (inList) {
+      htmlLines.push("</ul>");
+      inList = false;
+    }
+    if (line.trim()) htmlLines.push(`<p>${line}</p>`);
+  }
+  if (inList) htmlLines.push("</ul>");
+  return htmlLines.join("");
+}
+
 function addMessage(role, text) {
   const div = document.createElement("div");
   div.className = `msg msg--${role}`;
-  const p = document.createElement("p");
-  p.textContent = text;
-  div.appendChild(p);
+  div.innerHTML = renderMarkdown(text);
   chatEl.appendChild(div);
   chatEl.scrollTop = chatEl.scrollHeight;
   return div;
@@ -87,16 +116,19 @@ function renderPills() {
 function renderStoreTotals(storeTotals, budget) {
   if (!storeTotals || !storeTotals.length) return "";
 
+  // storeTotals is already sorted one-stop-coverage-first, then cheapest
+  // first, so the top 2 rows ARE the two cheapest options as-is.
   const oneStop = storeTotals.find((s) => s.covers_all_items);
-  const rows = storeTotals.map((s) => {
-    const isBest = oneStop ? s.store_name === oneStop.store_name : s === storeTotals[0];
+  const rankLabels = ["cheapest", "2nd cheapest"];
+  const rows = storeTotals.map((s, index) => {
+    const rank = index < rankLabels.length ? rankLabels[index] : null;
     const coverage = s.covers_all_items
       ? "has everything"
       : `missing ${escapeHtml(s.missing_items.join(", "))}`;
     return `
-      <div class="store-row${isBest ? " store-row--best" : ""}">
+      <div class="store-row${rank ? " store-row--best" : ""}">
         <div>
-          <div class="item-name">${escapeHtml(s.store_name)}${isBest ? ' <span class="snap-tag snap-tag--eligible">best</span>' : ""}</div>
+          <div class="item-name">${escapeHtml(s.store_name)}${rank ? ` <span class="snap-tag snap-tag--eligible">${rank}</span>` : ""}</div>
           <div class="item-store">${coverage}</div>
         </div>
         <div class="item-price">$${s.total.toFixed(2)}</div>
@@ -122,11 +154,15 @@ function renderResults(payload) {
 
   const rows = items.map(([item, rows]) => {
     const best = rows[0];
+    const estimate = best.estimated_real_price != null
+      ? `<div class="item-store">~$${best.estimated_real_price.toFixed(2)} estimated in-store price</div>`
+      : "";
     return `
       <div class="item-row">
         <div>
           <div class="item-name">${escapeHtml(item)} ${snapTag(best.snap_eligible)}</div>
           <div class="item-store">${escapeHtml(best.store_name)} — ${escapeHtml(best.name)}</div>
+          ${estimate}
         </div>
         <div class="item-price">$${best.price.toFixed(2)}</div>
       </div>`;
@@ -226,5 +262,12 @@ confirmYes.addEventListener("click", async () => {
   }
 });
 
+// Page load shows a blank chat either way (no history is restored visually),
+// so make that honest: reset the server-side session to match what's on
+// screen. Without this, a reload LOOKS like a fresh start but secretly isn't
+// -- the old conversation and budget silently carry over. Revisit once
+// there's a real "new chat" button that resets deliberately instead of
+// every reload.
+fetch("/api/reset", { method: "POST" }).catch(() => {});
 loadStatus();
 input.focus();

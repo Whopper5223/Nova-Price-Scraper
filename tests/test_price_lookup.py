@@ -16,8 +16,13 @@ _FIXTURE = {
             "url": "https://example.com",
             "product_count": 2,
             "products": [
-                {"name": "Butter Cookies", "price": 2.50, "unit": None, "department": "bakery"},
-                {"name": "Salted Butter", "price": 4.00, "unit": None, "department": "dairy"},
+                # Both dairy, both genuinely match "cheese" lexically, and
+                # both pass markup_data.classify() into the Cheese category --
+                # exercises lexical-only matching without the category filter
+                # (which only looks at department + keyword, not "is this
+                # really a block of cheese") getting in the way.
+                {"name": "Cheese Dip", "price": 2.50, "unit": None, "department": "dairy"},
+                {"name": "Sharp Cheddar Cheese", "price": 4.00, "unit": None, "department": "dairy"},
             ],
         }
     ],
@@ -32,8 +37,8 @@ _MULTI_STORE_FIXTURE = {
             "url": "https://a.example.com",
             "product_count": 2,
             "products": [
-                {"name": "Butter Cookies", "price": 1.00, "unit": None, "department": "bakery"},
-                {"name": "Salted Butter", "price": 5.00, "unit": None, "department": "dairy"},
+                {"name": "Cheese Dip", "price": 1.00, "unit": None, "department": "dairy"},
+                {"name": "Sharp Cheddar Cheese", "price": 5.00, "unit": None, "department": "dairy"},
             ],
         },
         {
@@ -41,8 +46,8 @@ _MULTI_STORE_FIXTURE = {
             "url": "https://b.example.com",
             "product_count": 2,
             "products": [
-                {"name": "Butter Cookies", "price": 1.50, "unit": None, "department": "bakery"},
-                {"name": "Salted Butter", "price": 3.00, "unit": None, "department": "dairy"},
+                {"name": "Cheese Dip", "price": 1.50, "unit": None, "department": "dairy"},
+                {"name": "Sharp Cheddar Cheese", "price": 3.00, "unit": None, "department": "dairy"},
             ],
         },
     ],
@@ -56,11 +61,11 @@ class TestQueryPricesLexicalOnly(unittest.TestCase):
     proven unreliable via live testing (Stage 1 alone scored ~19/21 vs Stage
     2's net-negative 17/21 on the project's live test set).
 
-    With Stage 2 gone, a "butter" query lexically (whole-word) matches both
-    "Butter Cookies" and "Salted Butter" and now intentionally returns both —
-    this is the accepted tradeoff, not a bug. The function itself and its own
-    unit tests remain in product_embeddings.py / test_product_embeddings.py
-    for a possible future call site.
+    With Stage 2 gone, a "cheese" query lexically (whole-word) matches both
+    "Cheese Dip" and "Sharp Cheddar Cheese" and now intentionally returns
+    both — this is the accepted tradeoff, not a bug. The function itself and
+    its own unit tests remain in product_embeddings.py /
+    test_product_embeddings.py for a possible future call site.
     """
 
     def setUp(self):
@@ -74,37 +79,37 @@ class TestQueryPricesLexicalOnly(unittest.TestCase):
 
     @patch("scraper.product_embeddings.ollama_client.embed")
     @patch("scraper.product_embeddings.get_embedding")
-    def test_butter_query_returns_both_lexical_matches_cheapest_first(self, mock_get_embedding, mock_embed):
-        results = price_lookup.query_prices("butter", path=self.fixture_path)
+    def test_cheese_query_returns_both_lexical_matches_cheapest_first(self, mock_get_embedding, mock_embed):
+        results = price_lookup.query_prices("cheese", path=self.fixture_path)
 
-        self.assertEqual([r["name"] for r in results], ["Butter Cookies", "Salted Butter"])
+        self.assertEqual([r["name"] for r in results], ["Cheese Dip", "Sharp Cheddar Cheese"])
         # Nothing left to mock: query_prices() no longer calls into the
         # embedding path at all.
         mock_embed.assert_not_called()
         mock_get_embedding.assert_not_called()
 
     def test_cheapest_by_store_returns_lexical_matches_at_both_stores(self):
-        # Both products lexically match "butter", and at both stores "Butter
-        # Cookies" is the cheaper of the two -- so it's the per-store winner
-        # at each store (Stage 2 would have dropped it; Stage 1 alone keeps
-        # it, per the accepted tradeoff).
+        # Both products lexically match "cheese", and at both stores "Cheese
+        # Dip" is the cheaper of the two -- so it's the per-store winner at
+        # each store (Stage 2 would have dropped it; Stage 1 alone keeps it,
+        # per the accepted tradeoff).
         multi_store_path = Path(self._tmpdir.name) / "multi.json"
         multi_store_path.write_text(json.dumps(_MULTI_STORE_FIXTURE))
 
-        results = price_lookup.cheapest_by_store("butter", path=multi_store_path)
+        results = price_lookup.cheapest_by_store("cheese", path=multi_store_path)
 
         names = {r["name"] for r in results}
         stores = {r["store_name"] for r in results}
-        self.assertEqual(names, {"Butter Cookies"})
+        self.assertEqual(names, {"Cheese Dip"})
         self.assertEqual(stores, {"Store A", "Store B"})
 
     def test_snap_eligibility_and_department_present(self):
-        results = price_lookup.query_prices("butter", path=self.fixture_path)
+        results = price_lookup.query_prices("cheese", path=self.fixture_path)
 
         by_name = {r["name"]: r for r in results}
-        self.assertEqual(by_name["Salted Butter"]["department"], "dairy")
-        self.assertEqual(by_name["Butter Cookies"]["department"], "bakery")
-        self.assertIn("snap_eligible", by_name["Salted Butter"])
+        self.assertEqual(by_name["Sharp Cheddar Cheese"]["department"], "dairy")
+        self.assertEqual(by_name["Cheese Dip"]["department"], "dairy")
+        self.assertIn("snap_eligible", by_name["Sharp Cheddar Cheese"])
 
 
 _NON_GROCERY_FIXTURE = {
