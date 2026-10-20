@@ -35,6 +35,7 @@ _CHEESE_WORDS = re.compile(
     r"brie|ricotta|colby|muenster|havarti|pepper\s*jack)\b",
     re.IGNORECASE,
 )
+_CHEESE_FALSE_POSITIVES = re.compile(r"\bbutter\b", re.IGNORECASE)
 _MILK_WORDS = re.compile(r"\bmilk\b", re.IGNORECASE)
 _MILK_FALSE_POSITIVES = re.compile(r"milk\s*chocolate|milk\s*duds", re.IGNORECASE)
 _BREAD_WORDS = re.compile(
@@ -67,7 +68,7 @@ def classify(name: str, department: str | None) -> str | None:
     if department == "dairy":
         if _MILK_WORDS.search(name) and not _MILK_FALSE_POSITIVES.search(name):
             return "Milk"
-        if _CHEESE_WORDS.search(name):
+        if _CHEESE_WORDS.search(name) and not _CHEESE_FALSE_POSITIVES.search(name):
             return "Cheese"
         return None
 

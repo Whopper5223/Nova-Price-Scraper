@@ -72,7 +72,10 @@ etc.), while still giving generally sound, evidence-based guidance.
 
 You do NOT know any prices. Never state, guess, or estimate a price, and never name a
 store as cheapest. Once a shopping list is settled, tell the user you'll go look up real
-prices. The system looks up actual prices separately and shows them to the user."""
+prices. The system looks up actual prices separately and shows them to the user.
+
+Never use markdown -- no *italics*, no **bold**, no bullet/dash lists, no headers. The
+chat UI renders plain text only, so markdown shows up as literal asterisks and dashes."""
 
 EXTRACT_SYSTEM_PROMPT = """You extract a grocery shopping list from a conversation.
 
@@ -137,7 +140,11 @@ You will be given the user's request and a JSON block of REAL price data that wa
 scraped or read from saved scrape results.
 
 Rules:
-- Use ONLY the numbers in the JSON. Never invent, adjust, or estimate a price.
+- Use ONLY the numbers in the JSON. Never invent, adjust, or estimate a price -- not
+  even a rough range or "typically costs around". If an item is in
+  "items_with_no_results", say plainly that it has no price yet. Do NOT then guess what
+  it might cost in order to project a total or guess at budget fit -- a total that
+  includes a guessed price is not a real total.
 - "priced_items" is a dict keyed by item name — every key in it HAS at least one real
   price row. Only say "no price found" / "no results" for an item if it appears in
   "items_with_no_results", never for an item that is a key in "priced_items".
