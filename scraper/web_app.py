@@ -152,6 +152,13 @@ def price():
         str(i).strip().lower() for i in body.get("items", []) if str(i).strip()
     ))
     budget = body.get("budget", sess.get("budget"))
+    if budget is not None:
+        try:
+            budget = float(budget)
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid budget"}), 400
+        if budget < 0:
+            return jsonify({"error": "invalid budget"}), 400
     if not items:
         return jsonify({"error": "no items"}), 400
 
