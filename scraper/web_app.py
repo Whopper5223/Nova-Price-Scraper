@@ -144,7 +144,13 @@ def chat():
 def price():
     body = request.get_json(silent=True) or {}
     sess = _get_session()
-    items = [str(i).strip().lower() for i in body.get("items", []) if str(i).strip()]
+    # dict.fromkeys dedupes while preserving first-occurrence order -- a caller
+    # sending a case-variant duplicate (e.g. "milk" and "Milk") would otherwise
+    # double-count that item's price in _store_basket_totals, which pivots on
+    # the lowercased item string as a dict key.
+    items = list(dict.fromkeys(
+        str(i).strip().lower() for i in body.get("items", []) if str(i).strip()
+    ))
     budget = body.get("budget", sess.get("budget"))
     if not items:
         return jsonify({"error": "no items"}), 400
