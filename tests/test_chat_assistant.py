@@ -150,10 +150,26 @@ class TestExtractListOnlySendsUserText(unittest.TestCase):
         _extract_list([{"role": "user", "content": "I have 20 dollars i eat vegan and theres 2 of us"}])
 
         messages = mock_chat_json.call_args[0][0]
-        self.assertEqual(len(messages), 9)
-        for i in (1, 3, 5, 7):
+        self.assertEqual(len(messages), 11)
+        for i in (1, 3, 5, 7, 9):
             self.assertEqual(messages[i]["role"], "assistant")
         self.assertIn("vegan", messages[-1]["content"])
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_extraction_call_includes_a_no_budget_short_item_demo(self, mock_chat_json):
+        # Locks in the fifth demo added to stop "I need milk"-shaped inputs from
+        # pattern-matching demo1 (the only budget-bearing example) and copying its
+        # literal 15.0 even when no money was mentioned.
+        mock_chat_json.return_value = {"ready": False, "items": [], "missing": "", "budget": None}
+        _extract_list([{"role": "user", "content": "hello"}])
+
+        messages = mock_chat_json.call_args[0][0]
+        demo5_input, demo5_output = messages[8], messages[9]
+        self.assertEqual(demo5_input["role"], "user")
+        self.assertIn("I need milk", demo5_input["content"])
+        self.assertEqual(demo5_output["role"], "assistant")
+        self.assertIn('"budget": null', demo5_output["content"])
+        self.assertIn('"milk"', demo5_output["content"])
 
     @patch("scraper.chat_assistant.ollama_client.chat_json")
     def test_extraction_call_includes_a_bare_greeting_demo(self, mock_chat_json):

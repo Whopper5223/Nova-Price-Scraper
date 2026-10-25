@@ -268,6 +268,16 @@ def _extract_list(history: list[dict]) -> dict:
         '{"ready": false, "items": [], '
         '"missing": "no specific dish or ingredient named yet", "budget": null}'
     )
+    # A fifth demo, same short "I've got/I need X" shape as demo1 but with NO budget
+    # mentioned -- without this, a short single-item ask like "I need milk" pattern-
+    # matched demo1 (the only budget-bearing example, and the closest in shape) and
+    # copied its literal 15.0 regardless of the written "budget is null unless stated"
+    # rule. A written rule alone didn't survive contact with that nearer example; this
+    # gives the model an equally-close template that lands on the right answer.
+    demo5_input = "I need milk"
+    demo5_output = (
+        '{"ready": true, "items": ["milk"], "missing": "", "budget": null}'
+    )
 
     result = ollama_client.chat_json(
         [
@@ -279,6 +289,8 @@ def _extract_list(history: list[dict]) -> dict:
             {"role": "assistant", "content": demo3_output},
             _turn(demo4_input, demo4_proposal),
             {"role": "assistant", "content": demo4_output},
+            _turn(demo5_input),
+            {"role": "assistant", "content": demo5_output},
             _turn(wants, last_proposal),
         ],
         system=EXTRACT_SYSTEM_PROMPT,

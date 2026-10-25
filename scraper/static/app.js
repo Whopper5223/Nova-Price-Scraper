@@ -5,6 +5,7 @@ const input = document.getElementById("input");
 const sendBtn = document.getElementById("sendBtn");
 const confirmBox = document.getElementById("confirmBox");
 const confirmList = document.getElementById("confirmList");
+const confirmMissing = document.getElementById("confirmMissing");
 const confirmYes = document.getElementById("confirmYes");
 const confirmNo = document.getElementById("confirmNo");
 const resultsEl = document.getElementById("results");
@@ -81,10 +82,20 @@ function snapTag(eligible) {
   return `<span class="snap-tag snap-tag--unclear">verify at checkout</span>`;
 }
 
-function renderConfirm(items) {
+function renderConfirm(items, missing) {
   pendingItems = [...items];
   confirmBox.hidden = false;
   renderPills();
+  // "ready" only means "some real food was named" -- it says nothing about whether
+  // something's still unresolved (e.g. "a drink" with no specific kind given). The
+  // server already tracks that gap in `missing`; show it here so confirming the list
+  // doesn't silently drop what it's still waiting on.
+  if (missing) {
+    confirmMissing.textContent = `Still unclear: ${missing}`;
+    confirmMissing.hidden = false;
+  } else {
+    confirmMissing.hidden = true;
+  }
   confirmBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
@@ -217,7 +228,7 @@ composer.addEventListener("submit", async (e) => {
 
     addMessage("assistant", data.reply);
     if (data.ready && data.items.length) {
-      renderConfirm(data.items);
+      renderConfirm(data.items, data.missing);
     }
   } catch (err) {
     thinking.remove();
