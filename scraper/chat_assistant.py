@@ -111,10 +111,15 @@ also named them. A dish the user has not personally named is not on the list yet
 is what stops half-picked assistant suggestions from being priced before the user agrees
 to them.
 
-If the user names a prepared dish or meal, include every ingredient a normal cook would
-need to make it, not only the words the user typed — draw on your own general cooking
-knowledge to expand the dish into its typical components. Do not reuse any example
-ingredient list, because none is given here on purpose.
+If the user names a prepared dish or meal with NO specific item of their own alongside it,
+include every ingredient a normal cook would need to make it, not only the words the user
+typed — draw on your own general cooking knowledge to expand the dish into its typical
+components. Do not reuse any example ingredient list, because none is given here on
+purpose. But if the user already names a specific item themselves and only mentions a
+dish/meal as context for it (what it's for, how it'll be used), that dish mention is NOT
+a request to provision the whole dish — extract only the item(s) actually named. "I need
+cheese for a sandwich" names one item (cheese); "sandwich" explains its purpose, not a
+request for bread, mayo, lettuce, etc. too.
 
 Exclude anything the user says they already have or do not want.
 
@@ -278,6 +283,15 @@ def _extract_list(history: list[dict]) -> dict:
     demo5_output = (
         '{"ready": true, "items": ["milk"], "missing": "", "budget": null}'
     )
+    # A sixth demo for a named item plus dish-as-context, not dish-to-expand — without
+    # this, "cheese for a sandwich" pattern-matched demo3's dish-expansion shape (a named
+    # dish -> list every typical ingredient) and added "bread" the user never asked for.
+    # The dish word here explains what the one named item is FOR, not a request to
+    # provision the whole meal.
+    demo6_input = "I need cheese for a sandwich, not cheese dip"
+    demo6_output = (
+        '{"ready": true, "items": ["cheese"], "missing": "", "budget": null}'
+    )
 
     result = ollama_client.chat_json(
         [
@@ -291,6 +305,8 @@ def _extract_list(history: list[dict]) -> dict:
             {"role": "assistant", "content": demo4_output},
             _turn(demo5_input),
             {"role": "assistant", "content": demo5_output},
+            _turn(demo6_input),
+            {"role": "assistant", "content": demo6_output},
             _turn(wants, last_proposal),
         ],
         system=EXTRACT_SYSTEM_PROMPT,
@@ -391,6 +407,28 @@ def _price_from_saved(items: list[str], max_age_hours: int, context: str = "") -
             findings[item] = rows
         else:
             unresolved.append(item)
+
+    # A judge call batching several items can say "no match" for one of them even
+    # when that exact candidate list judges fine alone (temperature=0, so this is
+    # deterministic, not sampling noise -- caught live with "orange juice" dropped
+    # only when batched alongside bread and cheese). Give any unresolved item that
+    # genuinely had candidates one solo retry before giving up on it -- juggling
+    # multiple ingredients at once seems to be what trips up the judge, not the
+    # candidate itself.
+    if len(items) > 1:
+        for item in [i for i in unresolved if item_candidate_names[i]]:
+            names = item_candidate_names[item]
+            solo_batch = [b for b in batch if b["ingredient"] == item]
+            solo_pick = product_matcher.pick_best_matches(
+                context or "a grocery shopping list", [item], solo_batch, model=JUDGE_MODEL,
+            )[0]
+            if solo_pick is None:
+                continue
+            chosen_name = names[solo_pick]
+            rows = price_lookup.cheapest_per_store([r for r in all_rows[item] if r["name"] == chosen_name])
+            if rows:
+                findings[item] = rows
+                unresolved.remove(item)
 
     if findings:
         print(f"[nova] Found {len(findings)} item(s) in saved prices.")

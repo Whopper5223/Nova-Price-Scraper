@@ -150,8 +150,8 @@ class TestExtractListOnlySendsUserText(unittest.TestCase):
         _extract_list([{"role": "user", "content": "I have 20 dollars i eat vegan and theres 2 of us"}])
 
         messages = mock_chat_json.call_args[0][0]
-        self.assertEqual(len(messages), 11)
-        for i in (1, 3, 5, 7, 9):
+        self.assertEqual(len(messages), 13)
+        for i in (1, 3, 5, 7, 9, 11):
             self.assertEqual(messages[i]["role"], "assistant")
         self.assertIn("vegan", messages[-1]["content"])
 
@@ -170,6 +170,23 @@ class TestExtractListOnlySendsUserText(unittest.TestCase):
         self.assertEqual(demo5_output["role"], "assistant")
         self.assertIn('"budget": null', demo5_output["content"])
         self.assertIn('"milk"', demo5_output["content"])
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_extraction_call_includes_a_named_item_with_dish_as_context_demo(self, mock_chat_json):
+        # Locks in the sixth demo added to stop "cheese for a sandwich" from
+        # pattern-matching demo3's dish-expansion shape and adding "bread" the user
+        # never asked for -- the dish word here is context for the named item, not a
+        # request to provision the whole meal.
+        mock_chat_json.return_value = {"ready": False, "items": [], "missing": "", "budget": None}
+        _extract_list([{"role": "user", "content": "hello"}])
+
+        messages = mock_chat_json.call_args[0][0]
+        demo6_input, demo6_output = messages[10], messages[11]
+        self.assertEqual(demo6_input["role"], "user")
+        self.assertIn("cheese for a sandwich", demo6_input["content"])
+        self.assertEqual(demo6_output["role"], "assistant")
+        self.assertIn('"items": ["cheese"]', demo6_output["content"])
+        self.assertNotIn("bread", demo6_output["content"])
 
     @patch("scraper.chat_assistant.ollama_client.chat_json")
     def test_extraction_call_includes_a_bare_greeting_demo(self, mock_chat_json):
@@ -313,6 +330,93 @@ class TestPriceFromSavedUsesJudge(unittest.TestCase):
         findings, unresolved = _price_from_saved(["cheese"], max_age_hours=0)
         self.assertEqual(findings, {})
         self.assertEqual(unresolved, ["cheese"])
+
+
+_MULTI_ITEM_FIXTURE = {
+    "scraped_at": "2026-01-01T00:00:00+00:00",
+    "location": "Test City",
+    "stores": [
+        {
+            "name": "Test Store",
+            "url": "https://example.com",
+            "product_count": 3,
+            "products": [
+                {"name": "White Bread", "price": 2.00, "unit": None, "department": "baked-goods"},
+                {"name": "Cheddar Cheese", "price": 3.00, "unit": None, "department": "dairy"},
+                {"name": "Orange Juice", "price": 4.00, "unit": None, "department": "beverages"},
+            ],
+        }
+    ],
+}
+
+
+class TestPriceFromSavedRetriesUnresolvedItemsSolo(unittest.TestCase):
+    """Caught live: a judge call batching 3 items said "no match" for orange juice
+    despite a real candidate existing, while the exact same candidate judged fine
+    when orange juice was the only item in the batch (temperature=0, so this is
+    deterministic, not sampling noise) -- a smaller judge model getting distracted
+    juggling multiple items at once, not a real "nothing fits" verdict."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        fixture_path = Path(self._tmpdir.name) / "prices.json"
+        fixture_path.write_text(json.dumps(_MULTI_ITEM_FIXTURE))
+        price_lookup.set_prices_path(fixture_path)
+
+    def tearDown(self):
+        price_lookup.set_prices_path(None)
+        self._tmpdir.cleanup()
+
+    @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
+    def test_item_with_real_candidates_marked_unresolved_in_a_batch_gets_retried_solo(self, mock_pick):
+        mock_pick.side_effect = [
+            [0, 0, None],  # batch call: bread, cheese, orange juice
+            [0],           # solo retry call: just orange juice
+        ]
+
+        findings, unresolved = _price_from_saved(
+            ["bread", "cheese", "orange juice"], max_age_hours=999999,
+        )
+
+        self.assertEqual(unresolved, [])
+        self.assertIn("orange juice", findings)
+        self.assertEqual(findings["orange juice"][0]["name"], "Orange Juice")
+        self.assertEqual(mock_pick.call_count, 2)
+        # The retry call judges ONLY the unresolved item, not the whole batch again.
+        retry_items_arg = mock_pick.call_args_list[1][0][1]
+        self.assertEqual(retry_items_arg, ["orange juice"])
+
+    @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
+    def test_single_item_batch_is_not_retried_on_explicit_no_match(self, mock_pick):
+        # A single-item request that gets None back is a real "no good candidate"
+        # judgment, not a batch-distraction artifact -- retrying the identical solo
+        # call again would just reproduce the same deterministic (temperature=0)
+        # answer, so don't bother. Also guards the existing no-match contract.
+        mock_pick.return_value = [None]
+
+        findings, unresolved = _price_from_saved(["cheese"], max_age_hours=999999)
+
+        self.assertEqual(findings, {})
+        self.assertEqual(unresolved, ["cheese"])
+        self.assertEqual(mock_pick.call_count, 1)
+
+    @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
+    def test_genuine_no_match_in_a_batch_still_ends_unresolved_after_retry(self, mock_pick):
+        # The retry is a second chance, not a guarantee -- if the solo retry also
+        # comes back None, respect it and leave the item unresolved rather than
+        # looping or forcing a pick.
+        mock_pick.side_effect = [
+            [0, 0, None],
+            [None],
+        ]
+
+        findings, unresolved = _price_from_saved(
+            ["bread", "cheese", "orange juice"], max_age_hours=999999,
+        )
+
+        self.assertEqual(unresolved, ["orange juice"])
+        self.assertNotIn("orange juice", findings)
+        self.assertEqual(mock_pick.call_count, 2)
 
 
 class TestPriceFromSavedJudgeAgainstRealModel(unittest.TestCase):
