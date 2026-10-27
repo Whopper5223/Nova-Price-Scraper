@@ -75,11 +75,11 @@ def query_prices(term: str, limit: int = 20, path: Path | None = None) -> list[d
     agree on what counts as a hit. Non-grocery departments (see
     _NON_GROCERY_DEPARTMENTS) are excluded before matching.
 
-    Results are further restricted to markup_data.CATEGORIES (Cheese, Milk,
-    Bread, Produce, Beverages) -- the only categories with real in-store
-    markup data behind them. A product outside those 5 is dropped rather
-    than shown with an un-adjusted Instacart price next to ones that are
-    markup-adjusted.
+    Results are further restricted to markup_data.CATEGORIES -- the categories
+    some store has a real in-store markup number for. A product in no such
+    category is dropped rather than shown with an un-adjusted Instacart price.
+    A product whose own store has no number for its category is kept, with
+    estimated_real_price None -- no estimate is invented for the gap.
 
     Each row: {store_name, store_url, name, price, unit, department,
     category, estimated_real_price}.
