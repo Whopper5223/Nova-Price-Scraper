@@ -186,6 +186,28 @@ class TestSummaryDescribesTheEstimatedPrices(unittest.TestCase):
         self.assertIn("sticker_priced_items", SUMMARY_SYSTEM_PROMPT)
 
 
+class TestSummaryPayloadStaysSmall(unittest.TestCase):
+    """The summary prompt only talks about each item's cheapest row, but the payload
+    carried every store's row. With a row per store that is ~4x the prompt tokens on
+    a slow model for text the summary is told to ignore."""
+
+    @patch("scraper.chat_assistant.ollama_client.chat")
+    def test_only_the_cheapest_row_per_item_is_sent_to_the_summary_model(self, mock_chat):
+        from scraper.chat_assistant import _summarize
+        mock_chat.return_value = "ok"
+        findings = {"milk": [
+            {"store_name": "ALDI", "name": "Whole Milk", "price": 1.59, "estimated_real_price": 1.59},
+            {"store_name": "Shaw's", "name": "Whole Milk", "price": 5.99, "estimated_real_price": 5.22},
+        ]}
+
+        _summarize("Price check for: milk", findings, [], ["milk"])
+
+        sent = json.loads(mock_chat.call_args[0][0][0]["content"])
+        self.assertEqual([r["store_name"] for r in sent["priced_items"]["milk"]], ["ALDI"])
+        # Store totals still cover every store.
+        self.assertEqual(len(sent["store_totals"]), 2)
+
+
 class TestJudgeModelWarning(unittest.TestCase):
     """The judge runs on its own model, separate from the chat model. If that model
     isn't pulled, every lookup silently degrades to "best-ranked candidate" -- so the

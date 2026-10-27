@@ -381,6 +381,67 @@ class TestRankCandidatesPrefersThePlainProduct(unittest.TestCase):
         ranked = price_lookup.rank_candidates("milk", rows)
         self.assertEqual(ranked[0]["name"], "Brand A Whole Milk")
 
+    def test_a_yogurt_made_with_whole_milk_is_still_plain_yogurt(self):
+        rows = [
+            _row("Chobani Pineapple Greek Yogurt", 1.29, "Yogurt"),
+            _row("Cabot Whole Milk Plain Greek Yogurt", 5.18, "Yogurt"),
+        ]
+        # Only the fruit flavor counts against the first row; "Whole Milk" must not
+        # count against the second just because it names milk.
+        ranked = price_lookup.rank_candidates("yogurt", rows)
+        self.assertEqual(ranked[0]["name"], "Cabot Whole Milk Plain Greek Yogurt")
+
+    def test_fruit_flavors_only_count_against_yogurt_not_against_cherry_tomatoes(self):
+        rows = [_row("Cherry Tomatoes", 2.00, "Produce"), _row("Roma Tomato", 2.50, "Produce")]
+        ranked = price_lookup.rank_candidates("tomatoes", rows)
+        self.assertEqual(ranked[0]["name"], "Cherry Tomatoes")
+
+    def test_a_marker_after_the_first_comma_still_counts(self):
+        rows = [
+            _row("Store Brand Orange Juice, Frozen Concentrate", 3.99, "Frozen"),
+            _row("Signature SELECT Orange Juice, No Pulp", 4.06, "Beverages"),
+        ]
+        ranked = price_lookup.rank_candidates("orange juice", rows)
+        self.assertEqual(ranked[0]["name"], "Signature SELECT Orange Juice, No Pulp")
+
+    def test_ground_coffee_ranks_above_cheaper_iced_coffee(self):
+        rows = [
+            _row("Barissimo Mocha Iced Coffee", 3.89, "Beverages"),
+            _row("Maxwell House Morning Brew Ground Coffee", 4.39, "Beverages"),
+        ]
+        ranked = price_lookup.rank_candidates("coffee", rows)
+        self.assertEqual(ranked[0]["name"], "Maxwell House Morning Brew Ground Coffee")
+
+    def test_cottage_cheese_ranks_below_a_block_or_slice_of_cheese(self):
+        rows = [
+            _row("Hood Cottage Cheese with Chive", 1.52, "Cheese"),
+            _row("Happy Farms Deli Sliced Provolone Cheese", 1.65, "Cheese"),
+        ]
+        ranked = price_lookup.rank_candidates("cheese", rows)
+        self.assertEqual(ranked[0]["name"], "Happy Farms Deli Sliced Provolone Cheese")
+
+    def test_a_product_outside_the_terms_home_category_ranks_last(self):
+        rows = [
+            _row("Simply Desserts Banana, Sugar Free Pudding", 0.10, "Baking Essentials"),
+            _row("Bananas, per lb", 0.16, "Produce"),
+            _row("Organic Bananas", 1.63, "Produce"),
+            _row("Banana", 0.26, "Produce"),
+        ]
+        ranked = price_lookup.rank_candidates("bananas", rows)
+        self.assertEqual(ranked[-1]["name"], "Simply Desserts Banana, Sugar Free Pudding")
+
+    def test_ambiguous_terms_keep_every_category_with_a_real_share_of_products(self):
+        # "tomatoes" is both fresh and canned; neither form is pushed out of the home set.
+        rows = [
+            _row("Roma Tomato", 0.55, "Produce"),
+            _row("Happy Harvest Diced Tomatoes", 1.09, "Canned Goods"),
+        ]
+        home = price_lookup._home_categories("tomatoes", rows)
+        self.assertEqual(home, {"Produce", "Canned Goods"})
+
+    def test_a_term_that_names_a_category_has_no_home_override(self):
+        self.assertIsNone(price_lookup._home_categories("cheese", [_row("Cheese Dip", 1.0, "Cheese")]))
+
 
 class TestClosestPerStore(unittest.TestCase):
     """The judge picks ONE product for an item; every other store should then show

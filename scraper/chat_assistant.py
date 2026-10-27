@@ -631,7 +631,9 @@ def _summarize(user_request: str, findings: dict, missing: list[str], all_items:
     payload = {
         "request": user_request,
         "budget": budget,
-        "priced_items": findings,
+        # Only each item's cheapest row: the prompt tells the model to talk about that
+        # one, and every store's row would be ~4x the tokens on a slow model.
+        "priced_items": {item: rows[:1] for item, rows in findings.items()},
         "items_with_no_results": missing,
         "store_totals": _store_basket_totals(findings, all_items),
     }

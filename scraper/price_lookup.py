@@ -156,16 +156,36 @@ def head_matches(term: str, name: str) -> bool:
 _VARIANT_MARKERS = re.compile(
     r"\b(flavou?red|flavou?r|seasoned|mix|instant|microwav\w*|ready|concentrate[d]?|"
     r"hard[- ]boiled|boiled|cooked|spread|dip|almond|oat|soy|coconut|cashew|"
-    r"garlic|herbs?|ranch|bbq|barbecue|chocolate|strawberry|vanilla|cinnamon|honey|maple)\b",
+    r"garlic|herbs?|ranch|bbq|barbecue|chocolate|strawberry|vanilla|cinnamon|honey|maple|"
+    # Seen crowding the plain product out of real windows: iced/cold-brew coffee for
+    # "coffee", Rice Sides for "rice", infused oils, cottage/cream cheese for "cheese",
+    # gizzards/sausage for "chicken".
+    r"iced|cold brew|infused|sides|cottage|cream cheese|gizzards|sausages?)\b",
     re.IGNORECASE,
 )
+
+
+# On a yogurt shelf the flavored cup is the rule and the plain tub the exception, so
+# fruit flavors only count as a variant for yogurt searches (a global "cherry" would
+# demote cherry tomatoes). Same exemption as _VARIANT_MARKERS: a flavor the shopper
+# typed ("blueberry yogurt") is never held against a product.
+_YOGURT_FLAVORS = re.compile(
+    r"\b(berry|berries|blueberry|raspberry|cherry|peach|pineapple|mango|banana|lemon|"
+    r"pomegranate|melonberry|cotton candy|on the bottom|drinkable|tubes?|tubles|pouches|smoothies?)\b",
+    re.IGNORECASE,
+)
+
+# A dairy term whose products are often made "with whole milk" ("Whole Milk Greek
+# Yogurt") -- naming milk there doesn't make them a different food.
+_MILK_MAKES_NO_VARIANT = {"Yogurt", "Cheese", "Butter & Creamer"}
 
 
 def _ranking(term: str):
     """(tier, is_variant) functions for ordering rows against `term`."""
     named = markup_data.categories_for_term(term)
     term_foods = markup_data.foods_named(term)
-    term_words = set(re.findall(r"[a-z0-9']+", term.lower()))
+    term_stems = set(product_embeddings.word_stems(term))
+    marker_sets = [_VARIANT_MARKERS] + ([_YOGURT_FLAVORS] if "Yogurt" in term_foods else [])
 
     def tier(row: dict) -> int:
         in_category = row.get("category") in named
@@ -178,11 +198,43 @@ def _ranking(term: str):
 
     def is_variant(row: dict) -> bool:
         head = _head_of(row["name"])
-        if markup_data.foods_named(head) - term_foods:
+        other_foods = markup_data.foods_named(head) - term_foods
+        if term_foods & _MILK_MAKES_NO_VARIANT:
+            other_foods.discard("Milk")
+        if other_foods:
             return True
-        return any(m.lower() not in term_words for m in _VARIANT_MARKERS.findall(head))
+        # Markers are looked for in the whole name, not just the head: the head stops
+        # at the first comma, which hides "Orange Juice, Frozen Concentrate". A marker
+        # is held against a product only if the shopper didn't type all of its words.
+        return any(
+            not set(product_embeddings.word_stems(m)) <= term_stems
+            for markers in marker_sets
+            for m in markers.findall(row["name"])
+        )
 
     return tier, is_variant
+
+
+def _home_categories(term: str, rows: list[dict]) -> set[str] | None:
+    """
+    Where `term`'s own products mostly live, for a term that names no category itself
+    ("pasta", "sugar", "bananas" have no keyword rule, so every product ending in the
+    word is tier 2): the categories holding at least half as many distinct products
+    as the busiest one. Canned SpaghettiOs, a Zero Sugar energy drink and banana
+    pudding sit outside their term's home, so they can be ranked behind it. None when
+    the term names a category (the tiers already handle that) or there is nothing to
+    count.
+    """
+    if markup_data.categories_for_term(term):
+        return None
+    pool = [r for r in rows if head_matches(term, r["name"])] or rows
+    counts: dict[str, int] = {}
+    for name, category in {(r["name"], r.get("category")) for r in pool}:
+        counts[category] = counts.get(category, 0) + 1
+    if not counts:
+        return None
+    busiest = max(counts.values())
+    return {category for category, n in counts.items() if 2 * n >= busiest}
 
 
 def rank_candidates(term: str, rows: list[dict]) -> list[dict]:
@@ -196,13 +248,19 @@ def rank_candidates(term: str, rows: list[dict]) -> list[dict]:
       1  in that category
       2  the word ends the product's name
       3  everything else
-    Within a tier the plain product comes before a flavored, prepared or
-    alternative one (butter before garlic parmesan butter, rice before cheddar
-    broccoli rice), then cheapest estimated in-store price first. Rows are only
-    reordered, never dropped.
+    Within a tier, products outside the term's home categories (see _home_categories)
+    come last, then the plain product before a flavored, prepared or alternative one
+    (butter before garlic parmesan butter, rice before cheddar broccoli rice), then
+    cheapest estimated in-store price first. Rows are only reordered, never dropped.
     """
     tier, is_variant = _ranking(term)
-    return sorted(rows, key=lambda r: (tier(r), is_variant(r), effective_price(r)))
+    home = _home_categories(term, rows)
+    return sorted(rows, key=lambda r: (
+        tier(r),
+        home is not None and r.get("category") not in home,
+        is_variant(r),
+        effective_price(r),
+    ))
 
 
 def closest_per_store(term: str, chosen: dict, rows: list[dict]) -> list[dict]:
