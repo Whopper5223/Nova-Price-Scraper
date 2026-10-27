@@ -137,11 +137,16 @@ function renderStoreTotals(storeTotals, budget) {
     const coverage = s.covers_all_items
       ? "has everything"
       : `${s.items_covered} of ${s.items_total} items — missing ${escapeHtml(s.missing_items.join(", "))}`;
+    // An item with no markup number for this store is counted at its Instacart price.
+    const sticker = (s.sticker_priced_items || []).length
+      ? `<div class="item-store">${escapeHtml(s.sticker_priced_items.join(", "))} counted at Instacart price (no in-store estimate)</div>`
+      : "";
     return `
       <div class="store-row${rank ? " store-row--best" : ""}">
         <div>
           <div class="item-name">${escapeHtml(s.store_name)}${rank ? ` <span class="snap-tag snap-tag--eligible">${rank}</span>` : ""}</div>
           <div class="item-store">${coverage}</div>
+          ${sticker}
         </div>
         <div class="item-price">$${s.total.toFixed(2)}</div>
       </div>`;
@@ -155,30 +160,49 @@ function renderStoreTotals(storeTotals, budget) {
 
   return `
     <h2 style="margin-top: var(--space-4)">Store comparison</h2>
+    <p class="item-store">Totals use the estimated in-store price.</p>
     ${rows}
     ${budgetHtml}
   `;
+}
+
+// The price to lead with: the estimated in-store price when the store has one (it is
+// what the store totals are built from), the Instacart price, labelled as such, when not.
+function formatPrice(row) {
+  if (row.estimated_real_price != null) {
+    return {
+      main: `~$${row.estimated_real_price.toFixed(2)}`,
+      note: `est. in-store · Instacart $${row.price.toFixed(2)}`,
+    };
+  }
+  return { main: `$${row.price.toFixed(2)}`, note: "Instacart price" };
+}
+
+// rows is one entry per store, cheapest first: the first leads, the rest are "Also at".
+function renderItemRow(item, rows) {
+  const best = rows[0];
+  const price = formatPrice(best);
+  const others = rows.slice(1).map((r) => {
+    const p = formatPrice(r);
+    return `<div class="item-also">${escapeHtml(r.store_name)} — ${escapeHtml(r.name)} · ${p.main} <span class="item-price-note">${escapeHtml(p.note)}</span></div>`;
+  }).join("");
+  const also = others ? `<div class="item-store">Also at:</div>${others}` : "";
+  return `
+      <div class="item-row">
+        <div>
+          <div class="item-name">${escapeHtml(item)}</div>
+          <div class="item-store">${escapeHtml(best.store_name)} — ${escapeHtml(best.name)}</div>
+          ${also}
+        </div>
+        <div class="item-price">${price.main}<div class="item-price-note">${escapeHtml(price.note)}</div></div>
+      </div>`;
 }
 
 function renderResults(payload) {
   const { findings, missing, summary, live_error, store_totals, budget } = payload;
   const items = Object.entries(findings);
 
-  const rows = items.map(([item, rows]) => {
-    const best = rows[0];
-    const estimate = best.estimated_real_price != null
-      ? `<div class="item-store">~$${best.estimated_real_price.toFixed(2)} estimated in-store price</div>`
-      : "";
-    return `
-      <div class="item-row">
-        <div>
-          <div class="item-name">${escapeHtml(item)}</div>
-          <div class="item-store">${escapeHtml(best.store_name)} — ${escapeHtml(best.name)}</div>
-          ${estimate}
-        </div>
-        <div class="item-price">$${best.price.toFixed(2)}</div>
-      </div>`;
-  }).join("");
+  const rows = items.map(([item, itemRows]) => renderItemRow(item, itemRows)).join("");
 
   const missingHtml = missing.length
     ? `<p class="missing">No price found for: ${escapeHtml(missing.join(", "))}</p>`

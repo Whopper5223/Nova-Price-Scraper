@@ -45,6 +45,8 @@ from scraper.chat_assistant import (
     _price_live,
     _store_basket_totals,
     _summarize,
+    judge_model_warning,
+    set_judge_model,
 )
 
 app = Flask(__name__, static_folder=str(Path(__file__).parent / "static"), static_url_path="")
@@ -234,6 +236,10 @@ def admin_scrape():
 def main() -> None:
     parser = argparse.ArgumentParser(description="Nova Grocery Assistant — web UI")
     parser.add_argument("--model", metavar="NAME", default=None)
+    parser.add_argument("--judge-model", metavar="NAME", default=None,
+                         help="Model that picks the right product for each item (default: "
+                              "the built-in judge model). Pass the chat model's name to judge "
+                              "with the same model.")
     parser.add_argument("--max-age-hours", type=int, default=price_lookup.DEFAULT_MAX_AGE_HOURS, metavar="N")
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--live-fallback", action="store_true",
@@ -266,6 +272,8 @@ def main() -> None:
 
     if args.model:
         ollama_client.OLLAMA_MODEL = args.model
+    if args.judge_model:
+        set_judge_model(args.judge_model)
     if args.prices_file:
         price_lookup.set_prices_path(Path(args.prices_file))
     CONFIG["max_age_hours"] = args.max_age_hours
@@ -280,6 +288,10 @@ def main() -> None:
         for w in warnings:
             print(f"  {w}\n")
         sys.exit(1)
+
+    judge_warning = judge_model_warning()
+    if judge_warning:
+        print(f"[nova] WARNING: {judge_warning}")
 
     print(f"[nova] Serving on http://{args.host}:{args.port} (model: {ollama_client.OLLAMA_MODEL})")
     app.run(host=args.host, port=args.port, debug=False, threaded=True)

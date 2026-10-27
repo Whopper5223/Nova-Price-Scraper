@@ -128,9 +128,10 @@ _SIZE_SUFFIX = re.compile(
 
 def _head_of(name: str) -> str:
     """The part of a product name that says what the product IS: before the first
-    comma, before any "with ..." clause, minus trailing sizes."""
+    comma, before any "with ..." or "in ..." clause ("Tuna in Olive Oil" is tuna),
+    minus trailing sizes."""
     head = name.split(",")[0]
-    head = re.split(r"\s+with\s+", head, maxsplit=1, flags=re.IGNORECASE)[0]
+    head = re.split(r"\s+(?:with|in)\s+", head, maxsplit=1, flags=re.IGNORECASE)[0]
     head = re.sub(r"\s*\(.*$", "", head)
     head = re.sub(r"\s*[-–]\s*\d.*$", "", head)
     return _SIZE_SUFFIX.sub("", head)
@@ -149,6 +150,41 @@ def head_matches(term: str, name: str) -> bool:
     return product_embeddings.word_stems(_head_of(name))[-len(wanted):] == wanted
 
 
+# Words that make a product a flavored, prepared or alternative version of the plain
+# thing. Deliberately short: they only demote a candidate (never drop it), and a word
+# the shopper typed themselves ("chocolate milk") is never held against a product.
+_VARIANT_MARKERS = re.compile(
+    r"\b(flavou?red|flavou?r|seasoned|mix|instant|microwav\w*|ready|concentrate[d]?|"
+    r"hard[- ]boiled|boiled|cooked|spread|dip|almond|oat|soy|coconut|cashew|"
+    r"garlic|herbs?|ranch|bbq|barbecue|chocolate|strawberry|vanilla|cinnamon|honey|maple)\b",
+    re.IGNORECASE,
+)
+
+
+def _ranking(term: str):
+    """(tier, is_variant) functions for ordering rows against `term`."""
+    named = markup_data.categories_for_term(term)
+    term_foods = markup_data.foods_named(term)
+    term_words = set(re.findall(r"[a-z0-9']+", term.lower()))
+
+    def tier(row: dict) -> int:
+        in_category = row.get("category") in named
+        is_head = head_matches(term, row["name"])
+        if in_category and is_head:
+            return 0
+        if in_category:
+            return 1
+        return 2 if is_head else 3
+
+    def is_variant(row: dict) -> bool:
+        head = _head_of(row["name"])
+        if markup_data.foods_named(head) - term_foods:
+            return True
+        return any(m.lower() not in term_words for m in _VARIANT_MARKERS.findall(head))
+
+    return tier, is_variant
+
+
 def rank_candidates(term: str, rows: list[dict]) -> list[dict]:
     """
     `rows` (every match for `term`) ordered best-first, for the judge's short
@@ -160,30 +196,66 @@ def rank_candidates(term: str, rows: list[dict]) -> list[dict]:
       1  in that category
       2  the word ends the product's name
       3  everything else
-    Cheapest first within a tier. Rows are only reordered, never dropped.
+    Within a tier the plain product comes before a flavored, prepared or
+    alternative one (butter before garlic parmesan butter, rice before cheddar
+    broccoli rice), then cheapest estimated in-store price first. Rows are only
+    reordered, never dropped.
     """
-    named = markup_data.categories_for_term(term)
+    tier, is_variant = _ranking(term)
+    return sorted(rows, key=lambda r: (tier(r), is_variant(r), effective_price(r)))
 
-    def tier(row: dict) -> int:
-        in_category = row.get("category") in named
-        is_head = head_matches(term, row["name"])
-        if in_category and is_head:
-            return 0
-        if in_category:
-            return 1
-        return 2 if is_head else 3
 
-    return sorted(rows, key=lambda r: (tier(r), r["price"]))
+def closest_per_store(term: str, chosen: dict, rows: list[dict]) -> list[dict]:
+    """
+    One row per store for `term`, each the closest equivalent of `chosen` (the
+    product the judge picked), cheapest in-store price first. A store carrying the
+    exact product gets it; any other store gets, from the chosen product's own
+    category, the plain product sharing the most descriptive words with it ("Store
+    Brand Whole Milk" for "Friendly Farms Vitamin D Whole Milk"), cheapest on a tie.
+    A store with nothing in that category is left out rather than shown a different food.
+    """
+    tier, is_variant = _ranking(term)
+    term_stems = set(product_embeddings.word_stems(term))
+    wanted = set(product_embeddings.word_stems(_head_of(chosen["name"]))) - term_stems
+
+    def shared_words(row: dict) -> int:
+        return len((set(product_embeddings.word_stems(_head_of(row["name"]))) - term_stems) & wanted)
+
+    by_store: dict[str, list[dict]] = {}
+    for row in rows:
+        by_store.setdefault(row["store_name"], []).append(row)
+
+    picked = []
+    for store_rows in by_store.values():
+        exact = [r for r in store_rows if r["name"] == chosen["name"]]
+        if exact:
+            picked.append(min(exact, key=effective_price))
+            continue
+        same_category = [r for r in store_rows if r.get("category") == chosen.get("category")]
+        if same_category:
+            picked.append(min(
+                same_category,
+                key=lambda r: (tier(r), is_variant(r), -shared_words(r), effective_price(r)),
+            ))
+    return sorted(picked, key=effective_price)
+
+
+def effective_price(row: dict) -> float:
+    """What a row costs for comparison: the estimated in-store price when the store
+    has a markup number for its category, otherwise the Instacart price as listed."""
+    estimate = row.get("estimated_real_price")
+    return row["price"] if estimate is None else estimate
 
 
 def cheapest_per_store(rows: list[dict]) -> list[dict]:
-    """Collapse `rows` (any order) to one cheapest entry per store."""
+    """Collapse `rows` (any order) to one cheapest entry per store, cheapest store
+    first -- by effective_price, since that's what a shopper would pay."""
     best: dict[str, dict] = {}
-    for row in sorted(rows, key=lambda p: p["price"]):
+    for row in sorted(rows, key=effective_price):
         store = row["store_name"]
         if store not in best:
             best[store] = row
-    return sorted(best.values(), key=lambda p: p["price"])
+    return sorted(best.values(), key=effective_price)
 
 
 def cheapest_by_store(term: str, path: Path | None = None) -> list[dict]:

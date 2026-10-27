@@ -47,12 +47,30 @@ DEFAULT_RESULTS = 5
 
 # Stage 3 judge model for disambiguating same-word-different-item matches
 # (e.g. "butter" vs "butter cookies") that department filtering can't catch,
-# since both are legitimately groceries. Deliberately smaller/faster than the
-# main chat model (OLLAMA_MODEL) -- this runs once per price lookup, on top of
-# the chat turn's own two model calls, so it shouldn't also be the slow model.
-JUDGE_MODEL = "llama3.2"
+# since both are legitimately groceries. Smaller/faster than the main chat model
+# (OLLAMA_MODEL) -- this runs once per price lookup, on top of the chat turn's own
+# two model calls. 8B rather than llama3.2's 3B because the judge must also be able
+# to say "none of these is the item": llama3.2 priced bacon as a pasta salad and
+# olive oil as sardines, where llama3.1 and qwen2.5:14b answered "none fit".
+JUDGE_MODEL = "llama3.1"
 
 _URL_RE = re.compile(r"https?://\S+")
+
+def set_judge_model(name: str) -> None:
+    """Choose the judge model at startup (web_app --judge-model), e.g. the chat model."""
+    global JUDGE_MODEL
+    JUDGE_MODEL = name
+
+
+def judge_model_warning() -> str | None:
+    """A startup warning when the judge model isn't pulled, else None. Without it
+    every lookup quietly falls back to the best-ranked candidate."""
+    models = ollama_client.list_models()
+    if JUDGE_MODEL in models or JUDGE_MODEL in {m.split(":")[0] for m in models}:
+        return None
+    return (f"Judge model '{JUDGE_MODEL}' isn't pulled, so product matching will fall back to "
+            f"the best-ranked candidate. Fix: ollama pull {JUDGE_MODEL}")
+
 
 CHAT_SYSTEM_PROMPT = """You are Nova, a friendly dietitian and grocery shopping assistant.
 
@@ -163,7 +181,16 @@ Rules:
 - "priced_items" is a dict keyed by item name — every key in it HAS at least one real
   price row. Only say "no price found" / "no results" for an item if it appears in
   "items_with_no_results", never for an item that is a key in "priced_items".
-- Mention the store name and the specific product name behind each price.
+- Mention the store name and the specific product name behind each price. Each item in
+  "priced_items" lists one row per store, cheapest first; unless a comparison matters,
+  talk about the first (cheapest) row only.
+- Each row has "price" (what Instacart lists) and "estimated_real_price" (the estimated
+  in-store price, null when there is no estimate for that store). When you quote a
+  product's price use estimated_real_price if it is not null and call it an estimated
+  in-store price; if it is null, quote "price" and call it the Instacart price. The
+  totals in "store_totals" are built the same way, and "sticker_priced_items" lists the
+  items in a total that were counted at their Instacart price. Never add up or
+  recompute a total yourself.
 - Each row has a snap_eligible field. Do NOT mention it, flag it, or bring up SNAP/EBT
   eligibility at all in your reply right now -- this is temporarily disabled, ignore
   that field entirely.
@@ -403,6 +430,13 @@ def _extract_list(history: list[dict]) -> dict:
 JUDGE_CANDIDATES_PER_ITEM = 8
 
 
+def _rows_for_pick(item: str, chosen_name: str, rows: list[dict]) -> list[dict]:
+    """One row per store for `item`: the judge's pick where a store carries it, and
+    that store's closest equivalent where it doesn't."""
+    chosen = min((r for r in rows if r["name"] == chosen_name), key=price_lookup.effective_price)
+    return price_lookup.closest_per_store(item, chosen, rows)
+
+
 def _price_from_saved(items: list[str], max_age_hours: int, context: str = "") -> tuple[dict, list[str]]:
     """
     Price what we can from prices_output.json.
@@ -475,8 +509,7 @@ def _price_from_saved(items: list[str], max_age_hours: int, context: str = "") -
         if pick is None or not names:
             unresolved.append(item)
             continue
-        chosen_name = names[pick]
-        rows = price_lookup.cheapest_per_store([r for r in all_rows[item] if r["name"] == chosen_name])
+        rows = _rows_for_pick(item, names[pick], all_rows[item])
         if rows:
             findings[item] = rows
         else:
@@ -501,8 +534,7 @@ def _price_from_saved(items: list[str], max_age_hours: int, context: str = "") -
                 continue
             if solo_pick is None:
                 continue
-            chosen_name = names[solo_pick]
-            rows = price_lookup.cheapest_per_store([r for r in all_rows[item] if r["name"] == chosen_name])
+            rows = _rows_for_pick(item, names[solo_pick], all_rows[item])
             if rows:
                 findings[item] = rows
                 unresolved.remove(item)
@@ -559,12 +591,17 @@ def _store_basket_totals(findings: dict, all_items: list[str]) -> list[dict]:
     Each row in findings[item] is already one-per-store (price_lookup.cheapest_by_store
     or the live-lookup equivalent), so this is just a pivot: item->store->price
     becomes store->total, with coverage tracked so a store missing half the list
-    doesn't masquerade as a bargain.
+    doesn't masquerade as a bargain. Prices are the estimated in-store price where a
+    row has one (price_lookup.effective_price), the Instacart price otherwise.
     """
     store_prices: dict[str, dict[str, float]] = {}
+    sticker_priced: dict[str, set[str]] = {}
     for item, rows in findings.items():
         for row in rows:
-            store_prices.setdefault(row["store_name"], {})[item] = row["price"]
+            store = row["store_name"]
+            store_prices.setdefault(store, {})[item] = price_lookup.effective_price(row)
+            if row.get("estimated_real_price") is None:
+                sticker_priced.setdefault(store, set()).add(item)
 
     totals = []
     for store, prices in store_prices.items():
@@ -575,6 +612,9 @@ def _store_basket_totals(findings: dict, all_items: list[str]) -> list[dict]:
             "items_covered": len(covered),
             "items_total": len(all_items),
             "missing_items": [i for i in all_items if i not in prices],
+            # Totals are estimated in-store prices; these items had no estimate for
+            # this store, so they're counted at their Instacart price.
+            "sticker_priced_items": [i for i in covered if i in sticker_priced.get(store, ())],
             "total": round(sum(prices[i] for i in covered), 2),
         })
     # Full coverage first, then the most items covered, then cheapest. Without the
@@ -621,7 +661,10 @@ def _plain_summary(findings: dict, missing: list[str], all_items: list[str],
     for item, rows in findings.items():
         best = rows[0]
         tag = _snap_tag(best.get("snap_eligible"))
-        lines.append(f"  {item:<24} ${best['price']:.2f}  at {best['store_name']}  ({best['name']}){tag}")
+        basis = "est. in-store" if best.get("estimated_real_price") is not None else "Instacart price"
+        lines.append(
+            f"  {item:<24} ${price_lookup.effective_price(best):.2f} ({basis})  at {best['store_name']}  ({best['name']}){tag}"
+        )
 
     store_totals = _store_basket_totals(findings, all_items)
     one_stop = next((s for s in store_totals if s["covers_all_items"]), None)

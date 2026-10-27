@@ -252,7 +252,7 @@ body {
 
 .item-name { font-weight: 500; }
 .item-store { color: var(--text-muted); font-size: 0.85rem; }
-.item-price { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.item-price { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
 
 .snap-tag {
   display: inline-block;
@@ -286,6 +286,19 @@ body {
   margin-top: var(--space-3);
   font-size: 0.85rem;
   color: var(--text-muted);
+}
+
+.item-also {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-left: var(--space-3);
+}
+
+.item-price-note {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  white-space: normal;
 }
 
 .summary {

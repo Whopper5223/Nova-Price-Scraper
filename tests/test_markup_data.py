@@ -346,5 +346,24 @@ class TestQueryPricesUsesTheFullCategorySet(unittest.TestCase):
         self.assertNotIn("Pizza Party Plates", names)
 
 
+class TestFoodsNamed(unittest.TestCase):
+    """Which keyword-classified foods a piece of text names, ALL of them (unlike
+    classify(), which stops at the first). Used to spot a product that is really
+    some other food: parmesan in a butter, cheddar in a rice."""
+
+    def test_names_every_food_it_mentions(self):
+        self.assertEqual(
+            markup_data.foods_named("Specially Selected Garlic Parmesan Butter"),
+            {"Butter & Creamer", "Cheese"},
+        )
+
+    def test_a_plain_product_names_only_itself(self):
+        self.assertEqual(markup_data.foods_named("Friendly Farms Whole Milk"), {"Milk"})
+
+    def test_text_naming_no_classified_food_is_empty(self):
+        self.assertEqual(markup_data.foods_named("Long Grain White Rice"), set())
+        self.assertEqual(markup_data.foods_named(""), set())
+
+
 if __name__ == "__main__":
     unittest.main()

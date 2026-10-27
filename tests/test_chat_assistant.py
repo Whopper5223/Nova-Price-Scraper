@@ -5,7 +5,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scraper import ollama_client, price_lookup
-from scraper.chat_assistant import _extract_list, _parse_budget, _price_from_saved, _store_basket_totals
+from scraper.chat_assistant import (
+    JUDGE_MODEL, SUMMARY_SYSTEM_PROMPT, _extract_list, _parse_budget, _plain_summary, _price_from_saved,
+    _store_basket_totals, judge_model_warning, set_judge_model,
+)
 from scraper.ollama_client import OllamaError
 
 
@@ -103,6 +106,139 @@ class TestStoreBasketTotals(unittest.TestCase):
 
         self.assertEqual(totals[0]["store_name"], "Full Coverage")
         self.assertTrue(totals[0]["covers_all_items"])
+
+
+class TestStoreBasketTotalsUseTheEstimatedInStorePrice(unittest.TestCase):
+    """Stores are compared on what the shopper would actually pay in the store:
+    the markup-adjusted estimate where a store has one, the Instacart price where it
+    doesn't. Comparing sticker prices overstated high-markup stores against ALDI."""
+
+    def test_total_uses_the_estimate_not_the_instacart_price(self):
+        findings = {"milk": [{"store_name": "Stop & Shop", "price": 3.16, "estimated_real_price": 2.37}]}
+
+        totals = _store_basket_totals(findings, ["milk"])
+
+        self.assertEqual(totals[0]["total"], 2.37)
+
+    def test_a_row_with_no_estimate_falls_back_to_its_instacart_price(self):
+        findings = {
+            "milk": [{"store_name": "Market Basket", "price": 3.00, "estimated_real_price": 2.50}],
+            "yogurt": [{"store_name": "Market Basket", "price": 1.29, "estimated_real_price": None}],
+        }
+
+        totals = _store_basket_totals(findings, ["milk", "yogurt"])
+
+        self.assertEqual(totals[0]["total"], 3.79)
+        self.assertEqual(totals[0]["sticker_priced_items"], ["yogurt"])
+
+    def test_rows_without_an_estimate_key_at_all_still_total(self):
+        findings = {"rice": [{"store_name": "ALDI", "price": 1.89}]}
+
+        totals = _store_basket_totals(findings, ["rice"])
+
+        self.assertEqual(totals[0]["total"], 1.89)
+        self.assertEqual(totals[0]["sticker_priced_items"], ["rice"])
+
+    def test_stores_are_ranked_on_estimates_so_a_marked_up_store_can_win(self):
+        # Stop & Shop's sticker price is higher, but its estimated in-store price is lower.
+        findings = {
+            "milk": [
+                {"store_name": "Stop & Shop", "price": 3.00, "estimated_real_price": 2.00},
+                {"store_name": "ALDI", "price": 2.50, "estimated_real_price": 2.50},
+            ],
+        }
+
+        totals = _store_basket_totals(findings, ["milk"])
+
+        self.assertEqual([s["store_name"] for s in totals], ["Stop & Shop", "ALDI"])
+
+    def test_a_fully_estimated_store_lists_no_sticker_items(self):
+        findings = {"milk": [{"store_name": "Stop & Shop", "price": 3.16, "estimated_real_price": 2.37}]}
+
+        totals = _store_basket_totals(findings, ["milk"])
+
+        self.assertEqual(totals[0]["sticker_priced_items"], [])
+
+
+class TestSummaryDescribesTheEstimatedPrices(unittest.TestCase):
+    def test_plain_fallback_summary_quotes_the_estimated_in_store_price(self):
+        findings = {"milk": [{"store_name": "Stop & Shop", "name": "Store Brand Whole Milk",
+                              "price": 3.16, "estimated_real_price": 2.37}]}
+
+        text = _plain_summary(findings, [], ["milk"])
+
+        self.assertIn("$2.37", text)
+        self.assertIn("est. in-store", text)
+
+    def test_plain_fallback_summary_labels_a_row_with_no_estimate_as_the_instacart_price(self):
+        findings = {"yogurt": [{"store_name": "Market Basket", "name": "Chobani Yogurt",
+                                "price": 1.29, "estimated_real_price": None}]}
+
+        text = _plain_summary(findings, [], ["yogurt"])
+
+        self.assertIn("$1.29", text)
+        self.assertIn("Instacart price", text)
+
+    def test_the_summary_model_is_told_what_the_totals_are_made_of(self):
+        # Totals are estimated in-store prices; without this the model quotes the
+        # sticker price next to a total that doesn't add up from it.
+        self.assertIn("estimated_real_price", SUMMARY_SYSTEM_PROMPT)
+        self.assertIn("sticker_priced_items", SUMMARY_SYSTEM_PROMPT)
+
+
+class TestJudgeModelWarning(unittest.TestCase):
+    """The judge runs on its own model, separate from the chat model. If that model
+    isn't pulled, every lookup silently degrades to "best-ranked candidate" -- so the
+    server should say so at startup instead of nobody noticing."""
+
+    @patch("scraper.chat_assistant.ollama_client.list_models")
+    def test_a_pulled_judge_model_gives_no_warning(self, mock_list):
+        mock_list.return_value = [f"{JUDGE_MODEL}:latest", "qwen3.8:27b"]
+
+        self.assertIsNone(judge_model_warning())
+
+    @patch("scraper.chat_assistant.ollama_client.list_models")
+    def test_a_missing_judge_model_says_how_to_pull_it(self, mock_list):
+        mock_list.return_value = ["qwen3.8:27b", "llama3.2:latest"]
+
+        warning = judge_model_warning()
+
+        self.assertIn(JUDGE_MODEL, warning)
+        self.assertIn(f"ollama pull {JUDGE_MODEL}", warning)
+
+
+class TestJudgeModelIsConfigurable(unittest.TestCase):
+    """Which model judges products is a server-start choice (--judge-model), so it can
+    be changed without a code push, e.g. to the chat model."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        fixture_path = Path(self._tmpdir.name) / "prices.json"
+        fixture_path.write_text(json.dumps(_MULTI_ITEM_FIXTURE))
+        price_lookup.set_prices_path(fixture_path)
+
+    def tearDown(self):
+        set_judge_model(JUDGE_MODEL)
+        price_lookup.set_prices_path(None)
+        self._tmpdir.cleanup()
+
+    @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
+    def test_the_judge_call_uses_the_configured_model(self, mock_pick):
+        mock_pick.return_value = [0]
+        set_judge_model("qwen3.8:27b")
+
+        _price_from_saved(["bread"], max_age_hours=999999)
+
+        self.assertEqual(mock_pick.call_args.kwargs["model"], "qwen3.8:27b")
+
+    @patch("scraper.chat_assistant.ollama_client.list_models")
+    def test_the_startup_warning_checks_the_configured_model(self, mock_list):
+        mock_list.return_value = ["qwen3.8:27b"]
+        set_judge_model("qwen3.8:27b")
+        self.assertIsNone(judge_model_warning())
+
+        set_judge_model("llama3.1")
+        self.assertIn("llama3.1", judge_model_warning())
 
 
 class TestExtractListOnlySendsUserText(unittest.TestCase):
@@ -615,6 +751,74 @@ class TestPriceFromSavedShowsTheJudgeTheRealItemsFirst(unittest.TestCase):
         candidate_names = [c["name"] for c in mock_pick.call_args[0][2][0]["candidates"]]
         self.assertEqual(candidate_names[:2], ["Mild Swiss Cheese", "Sharp Cheddar Cheese"])
         self.assertEqual(findings["cheese"][0]["name"], "Mild Swiss Cheese")
+
+
+def _three_store_milk_fixture():
+    def store(name, products):
+        return {"name": name, "url": "https://example.com", "product_count": len(products), "products": products}
+
+    return {
+        "scraped_at": "2026-01-01T00:00:00+00:00",
+        "location": "Test City",
+        "stores": [
+            store("ALDI", [
+                {"name": "Friendly Farms Vitamin D Whole Milk", "price": 1.59, "unit": None, "department": "dairy"},
+            ]),
+            store("Stop & Shop", [
+                {"name": "Store Brand 2% Reduced Fat Milk", "price": 2.10, "unit": None, "department": "dairy"},
+                {"name": "Store Brand Whole Milk", "price": 3.16, "unit": None, "department": "dairy"},
+            ]),
+            store("Shaw's", [
+                {"name": "Shaw's Whole Milk", "price": 3.20, "unit": None, "department": "dairy"},
+            ]),
+        ],
+    }
+
+
+class TestPriceFromSavedShowsEveryStoresClosestMatch(unittest.TestCase):
+    """The judge picks one product; the other stores must show their own closest
+    version of it instead of vanishing because they don't stock that exact SKU."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        fixture_path = Path(self._tmpdir.name) / "prices.json"
+        fixture_path.write_text(json.dumps(_three_store_milk_fixture()))
+        price_lookup.set_prices_path(fixture_path)
+
+    def tearDown(self):
+        price_lookup.set_prices_path(None)
+        self._tmpdir.cleanup()
+
+    @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
+    def test_every_store_with_an_equivalent_gets_a_row(self, mock_pick):
+        names = None
+
+        def pick(_context, _items, batch, model=None):
+            nonlocal names
+            names = [c["name"] for c in batch[0]["candidates"]]
+            return [names.index("Friendly Farms Vitamin D Whole Milk")]
+
+        mock_pick.side_effect = pick
+
+        findings, unresolved = _price_from_saved(["milk"], max_age_hours=999999)
+
+        self.assertEqual(unresolved, [])
+        by_store = {r["store_name"]: r["name"] for r in findings["milk"]}
+        self.assertEqual(by_store, {
+            "ALDI": "Friendly Farms Vitamin D Whole Milk",
+            "Stop & Shop": "Store Brand Whole Milk",
+            "Shaw's": "Shaw's Whole Milk",
+        })
+
+    @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
+    def test_store_totals_now_cover_the_whole_list_at_every_store(self, mock_pick):
+        mock_pick.return_value = [0]
+
+        findings, _ = _price_from_saved(["milk"], max_age_hours=999999)
+        totals = _store_basket_totals(findings, ["milk"])
+
+        self.assertEqual(len(totals), 3)
+        self.assertTrue(all(t["covers_all_items"] for t in totals))
 
 
 class TestPriceFromSavedSurvivesAFailingJudge(unittest.TestCase):

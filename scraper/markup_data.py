@@ -177,6 +177,29 @@ def categories_for_term(term: str) -> set[str]:
     return {c for d in _KEYWORD_SPLIT_DEPARTMENTS if (c := classify(term, d))}
 
 
+# Every keyword rule classify() applies, kept apart so each can be asked about on its own.
+_NAMED_FOODS = (
+    ("Butter & Creamer", _BUTTER_CREAMER_WORDS),
+    ("Cheese", _CHEESE_WORDS),
+    ("Yogurt", _YOGURT_WORDS),
+    ("Milk", _MILK_WORDS),
+    ("Bread", _BREAD_WORDS),
+    ("Cereal", _CEREAL_WORDS),
+    ("Fish & Seafood", _FISH_WORDS),
+    ("Chicken", _CHICKEN_WORDS),
+    ("Beef", _BEEF_NAMED),
+)
+
+
+def foods_named(text: str) -> set[str]:
+    """
+    Every classified food `text` mentions (classify() stops at the first). A
+    product naming a food other than the one searched for is a variant of it, not
+    the plain thing: "Garlic Parmesan Butter" names Butter AND Cheese.
+    """
+    return {category for category, pattern in _NAMED_FOODS if pattern.search(text or "")}
+
+
 # Market Basket's sheet has one combined MEAT/FISH row (a single matched item)
 # instead of separate beef/chicken/fish rows, so that one number covers each.
 _MARKET_BASKET_MEAT_FISH = (0.2505, 1)

@@ -169,9 +169,6 @@ class TestNonGroceryDepartmentsExcluded(unittest.TestCase):
         self.assertEqual([r["name"] for r in results], ["Nature's Promise Whole Milk"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 def _row(name, price, category=None, store="Test Store"):
     return {"store_name": store, "name": name, "price": price, "category": category}
@@ -208,6 +205,18 @@ class TestHeadMatches(unittest.TestCase):
             "rice", "Earthly Grains Chicken Flavored Rice & Vermicelli Mix"))
         self.assertFalse(price_lookup.head_matches(
             "olive oil", "Earthly Grains Roasted Garlic & Olive Oil Couscous Mix"))
+
+
+    def test_a_packing_medium_is_not_the_product(self):
+        # "Tuna in Olive Oil" is tuna; the oil it's packed in is not what's being sold.
+        self.assertFalse(price_lookup.head_matches(
+            "olive oil", "Fremont Fish Market Yellowfin Tuna in Olive Oil, Lemon"))
+        self.assertFalse(price_lookup.head_matches("olive oil", "Sardines Packed in Olive Oil"))
+        self.assertFalse(price_lookup.head_matches("water", "Sliced Peaches in Water"))
+
+    def test_the_product_itself_still_matches_when_it_has_an_in_elsewhere(self):
+        self.assertTrue(price_lookup.head_matches("olive oil", "Extra Virgin Olive Oil"))
+        self.assertTrue(price_lookup.head_matches("oil", "Cooking Oil, Made in Italy"))
 
 
 class TestRankCandidates(unittest.TestCase):
@@ -248,6 +257,14 @@ class TestRankCandidates(unittest.TestCase):
         ranked = price_lookup.rank_candidates("olive oil", rows)
         self.assertEqual(ranked[0]["name"], "Extra Virgin Olive Oil")
 
+    def test_olive_oil_ranks_a_bottle_of_oil_above_cheaper_tuna_packed_in_it(self):
+        rows = [
+            _row("Fremont Fish Market Yellowfin Tuna in Olive Oil, Lemon", 2.75, "Canned Goods"),
+            _row("Extra Virgin Olive Oil", 7.99, "Oils & Spices"),
+        ]
+        ranked = price_lookup.rank_candidates("olive oil", rows)
+        self.assertEqual(ranked[0]["name"], "Extra Virgin Olive Oil")
+
     def test_chips_ranks_potato_chips_above_chocolate_chip_bars(self):
         rows = [
             _row("Chocolate Chip Chewy Dipped Granola Bars", 1.89, "Snacks"),
@@ -278,3 +295,164 @@ class TestRankCandidates(unittest.TestCase):
         ranked = price_lookup.rank_candidates("cheese", rows)
         self.assertEqual(sorted(r["name"] for r in ranked), sorted(r["name"] for r in rows))
 
+
+class TestCheapestPerStoreUsesTheEstimatedPrice(unittest.TestCase):
+    def test_stores_are_ordered_by_estimated_in_store_price(self):
+        rows = [
+            {"store_name": "Stop & Shop", "name": "Whole Milk", "price": 3.00, "estimated_real_price": 2.00},
+            {"store_name": "ALDI", "name": "Whole Milk", "price": 2.50, "estimated_real_price": 2.50},
+        ]
+        ordered = price_lookup.cheapest_per_store(rows)
+        self.assertEqual([r["store_name"] for r in ordered], ["Stop & Shop", "ALDI"])
+
+    def test_effective_price_prefers_the_estimate_and_falls_back_to_the_listed_price(self):
+        self.assertEqual(price_lookup.effective_price({"price": 3.16, "estimated_real_price": 2.37}), 2.37)
+        self.assertEqual(price_lookup.effective_price({"price": 1.29, "estimated_real_price": None}), 1.29)
+        self.assertEqual(price_lookup.effective_price({"price": 1.89}), 1.89)
+
+
+class TestRankCandidatesPrefersThePlainProduct(unittest.TestCase):
+    """For a bare word like butter or rice the plain product should lead, even when a
+    flavored, seasoned or frozen version is cheaper. Variants are demoted, not dropped."""
+
+    def test_butter_ranks_plain_butter_above_cheaper_garlic_parmesan_butter(self):
+        rows = [
+            _row("Specially Selected Garlic Parmesan Butter", 2.75, "Butter & Creamer"),
+            _row("Kates Butter Homemade Unsalted Butter", 2.99, "Butter & Creamer"),
+        ]
+        ranked = price_lookup.rank_candidates("butter", rows)
+        self.assertEqual(ranked[0]["name"], "Kates Butter Homemade Unsalted Butter")
+
+    def test_rice_ranks_plain_rice_above_cheaper_cheddar_broccoli_rice(self):
+        rows = [
+            _row("Earthly Grains Cheddar Broccoli Rice", 1.09, "Pasta & Dry Goods"),
+            _row("Long Grain White Rice", 2.49, "Pasta & Dry Goods"),
+        ]
+        ranked = price_lookup.rank_candidates("rice", rows)
+        self.assertEqual(ranked[0]["name"], "Long Grain White Rice")
+
+    def test_orange_juice_ranks_bottled_juice_above_cheaper_frozen_concentrate(self):
+        rows = [
+            _row("Market Basket Frozen Concentrated Orange Juice", 1.99, "Frozen"),
+            _row("Tropicana Orange Juice", 3.49, "Beverages"),
+        ]
+        ranked = price_lookup.rank_candidates("orange juice", rows)
+        self.assertEqual(ranked[0]["name"], "Tropicana Orange Juice")
+
+    def test_plain_milk_ranks_above_cheaper_almond_milk_and_chocolate_milk(self):
+        rows = [
+            _row("Silk Unsweetened Almond Milk", 1.99, "Milk"),
+            _row("Hershey's Chocolate Milk", 2.19, "Milk"),
+            _row("Friendly Farms Whole Milk", 2.89, "Milk"),
+        ]
+        ranked = price_lookup.rank_candidates("milk", rows)
+        self.assertEqual(ranked[0]["name"], "Friendly Farms Whole Milk")
+
+    def test_a_flavor_the_shopper_asked_for_is_not_held_against_the_product(self):
+        rows = [
+            _row("Hershey's Chocolate Almond Milk", 1.99, "Milk"),
+            _row("Hershey's Chocolate Milk", 2.49, "Milk"),
+        ]
+        ranked = price_lookup.rank_candidates("chocolate milk", rows)
+        # "chocolate" was asked for, so only "almond" counts against the first row.
+        self.assertEqual(ranked[0]["name"], "Hershey's Chocolate Milk")
+
+    def test_a_real_cheese_is_not_demoted_for_naming_a_kind_of_cheese(self):
+        rows = [
+            _row("Sharp Cheddar Cheese", 4.00, "Cheese"),
+            _row("Mild Swiss Cheese", 2.50, "Cheese"),
+        ]
+        ranked = price_lookup.rank_candidates("cheese", rows)
+        self.assertEqual([r["name"] for r in ranked], ["Mild Swiss Cheese", "Sharp Cheddar Cheese"])
+
+    def test_variants_are_still_in_the_list_after_the_plain_products(self):
+        rows = [
+            _row("Garlic Parmesan Butter", 2.75, "Butter & Creamer"),
+            _row("Salted Butter", 3.99, "Butter & Creamer"),
+        ]
+        ranked = price_lookup.rank_candidates("butter", rows)
+        self.assertEqual([r["name"] for r in ranked], ["Salted Butter", "Garlic Parmesan Butter"])
+
+    def test_ordering_within_plain_products_is_by_estimated_in_store_price(self):
+        rows = [
+            {**_row("Brand A Whole Milk", 3.00, "Milk"), "estimated_real_price": 2.00},
+            {**_row("Brand B Whole Milk", 2.50, "Milk"), "estimated_real_price": 2.50},
+        ]
+        ranked = price_lookup.rank_candidates("milk", rows)
+        self.assertEqual(ranked[0]["name"], "Brand A Whole Milk")
+
+
+class TestClosestPerStore(unittest.TestCase):
+    """The judge picks ONE product for an item; every other store should then show
+    its own closest equivalent, so the stores can actually be compared."""
+
+    def _milk_rows(self):
+        return [
+            _row("Friendly Farms Vitamin D Whole Milk", 1.59, "Milk", store="ALDI"),
+            _row("Store Brand 2% Reduced Fat Milk", 2.10, "Milk", store="Stop & Shop"),
+            _row("Store Brand Chocolate Milk", 1.50, "Milk", store="Stop & Shop"),
+            _row("Store Brand Whole Milk", 3.16, "Milk", store="Stop & Shop"),
+            _row("SNICKERS Milk Chocolate Candy Bar", 0.99, "Snacks", store="Stop & Shop"),
+            _row("Shaw's 1% Lowfat Milk", 2.40, "Milk", store="Shaw's"),
+        ]
+
+    def test_each_store_gets_exactly_one_row_for_the_item(self):
+        rows = self._milk_rows()
+        chosen = rows[0]
+
+        picked = price_lookup.closest_per_store("milk", chosen, rows)
+
+        stores = [r["store_name"] for r in picked]
+        self.assertEqual(sorted(stores), sorted(set(stores)))
+
+    def test_another_store_shows_the_version_most_like_the_chosen_product(self):
+        rows = self._milk_rows()
+
+        picked = price_lookup.closest_per_store("milk", rows[0], rows)
+
+        stop_and_shop = next(r for r in picked if r["store_name"] == "Stop & Shop")
+        self.assertEqual(stop_and_shop["name"], "Store Brand Whole Milk")
+
+    def test_the_chosen_product_is_kept_for_its_own_store(self):
+        rows = self._milk_rows()
+
+        picked = price_lookup.closest_per_store("milk", rows[0], rows)
+
+        aldi = next(r for r in picked if r["store_name"] == "ALDI")
+        self.assertEqual(aldi["name"], "Friendly Farms Vitamin D Whole Milk")
+
+    def test_a_store_selling_the_exact_same_product_is_matched_exactly(self):
+        rows = [
+            _row("Chobani Greek Yogurt", 1.29, "Yogurt", store="Market Basket"),
+            _row("Chobani Greek Yogurt", 1.49, "Yogurt", store="Stop & Shop"),
+            _row("Store Brand Plain Yogurt", 0.89, "Yogurt", store="Stop & Shop"),
+        ]
+
+        picked = price_lookup.closest_per_store("yogurt", rows[0], rows)
+
+        stop_and_shop = next(r for r in picked if r["store_name"] == "Stop & Shop")
+        self.assertEqual(stop_and_shop["name"], "Chobani Greek Yogurt")
+
+    def test_other_stores_only_offer_products_from_the_chosen_products_category(self):
+        rows = [
+            _row("Friendly Farms Whole Milk", 1.59, "Milk", store="ALDI"),
+            _row("SNICKERS Milk Chocolate Candy Bar", 0.99, "Snacks", store="Shaw's"),
+        ]
+
+        picked = price_lookup.closest_per_store("milk", rows[0], rows)
+
+        self.assertEqual([r["store_name"] for r in picked], ["ALDI"])
+
+    def test_results_are_ordered_cheapest_in_store_first(self):
+        rows = [
+            {**_row("Store Brand Whole Milk", 3.16, "Milk", store="Stop & Shop"), "estimated_real_price": 2.37},
+            {**_row("Friendly Farms Whole Milk", 2.50, "Milk", store="ALDI"), "estimated_real_price": 2.50},
+        ]
+
+        picked = price_lookup.closest_per_store("milk", rows[1], rows)
+
+        self.assertEqual([r["store_name"] for r in picked], ["Stop & Shop", "ALDI"])
+
+
+if __name__ == "__main__":
+    unittest.main()
