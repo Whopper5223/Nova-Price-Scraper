@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from scraper import ollama_client, price_lookup
 from scraper.chat_assistant import _extract_list, _parse_budget, _price_from_saved, _store_basket_totals
+from scraper.ollama_client import OllamaError
 
 
 class TestParseBudget(unittest.TestCase):
@@ -63,6 +64,27 @@ class TestStoreBasketTotals(unittest.TestCase):
         # which item it covers.
         self.assertEqual(totals[0]["store_name"], "Market Basket")
         self.assertEqual(totals[0]["missing_items"], ["chicken"])
+
+    def test_when_nobody_covers_everything_more_items_beats_a_lower_total(self):
+        # A store that covers 1 of 3 items for $1 isn't a bargain next to stores
+        # that cover 2 of 3 -- its total is low only because it has less on it.
+        findings = {
+            "milk": [
+                {"store_name": "Sparse Store", "price": 1.00},
+                {"store_name": "Mid Store", "price": 2.00},
+                {"store_name": "Pricier Store", "price": 2.50},
+            ],
+            "bread": [
+                {"store_name": "Mid Store", "price": 1.50},
+                {"store_name": "Pricier Store", "price": 2.00},
+            ],
+        }
+        totals = _store_basket_totals(findings, ["milk", "bread", "eggs"])
+
+        self.assertEqual(
+            [s["store_name"] for s in totals], ["Mid Store", "Pricier Store", "Sparse Store"],
+        )
+        self.assertEqual([s["items_covered"] for s in totals], [2, 2, 1])
 
     def test_empty_findings_returns_empty_totals(self):
         self.assertEqual(_store_basket_totals({}, ["chicken"]), [])
@@ -224,6 +246,127 @@ class TestExtractListOnlySendsUserText(unittest.TestCase):
         self.assertIn('"items": []', reject_output["content"])
 
 
+class TestExtractListFencesOffTheWorkedExamples(unittest.TestCase):
+    """Live testing found "I need bread" coming back as items [milk, cheese, bread]
+    with budget 15.0 -- the milk, the cheese and the 15 are each the answer from a
+    DIFFERENT worked example. The examples are shown as earlier chat turns, and the
+    prompt tells the model to combine everything across every message, so it read
+    the example users' facts as part of the real user's conversation."""
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_real_turn_says_it_is_a_separate_conversation(self, mock_chat_json):
+        mock_chat_json.return_value = {"ready": False, "items": [], "missing": "", "budget": None}
+        _extract_list([{"role": "user", "content": "I need bread"}])
+
+        messages = mock_chat_json.call_args[0][0]
+        self.assertIn("unrelated to the examples above", messages[-1]["content"])
+        self.assertIn("I need bread", messages[-1]["content"])
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_worked_example_turns_are_not_fenced(self, mock_chat_json):
+        mock_chat_json.return_value = {"ready": False, "items": [], "missing": "", "budget": None}
+        _extract_list([{"role": "user", "content": "I need bread"}])
+
+        messages = mock_chat_json.call_args[0][0]
+        for i in range(0, len(messages) - 1, 2):
+            self.assertNotIn("unrelated to the examples above", messages[i]["content"])
+
+
+class TestExtractListBudgetMustBeStated(unittest.TestCase):
+    """A budget is only real if the user's own words contain an amount. The model
+    kept inventing 15.0 (the number from a worked example) for messages with no
+    money in them at all, so no amount in the words means no budget, whatever the
+    model said."""
+
+    def _extract(self, user_text, model_budget, mock_chat_json):
+        mock_chat_json.return_value = {
+            "ready": True, "items": ["bread"], "missing": "", "budget": model_budget,
+        }
+        return _extract_list([{"role": "user", "content": user_text}])
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_invented_budget_is_dropped_when_the_user_mentioned_no_amount(self, mock_chat_json):
+        self.assertIsNone(self._extract("I need bread", 15.0, mock_chat_json)["budget"])
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_a_number_word_with_no_money_cue_is_not_a_budget(self, mock_chat_json):
+        self.assertIsNone(self._extract("I need one loaf of bread", 15.0, mock_chat_json)["budget"])
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_budget_stated_in_digits_is_kept(self, mock_chat_json):
+        result = self._extract("I need bread, I have 12 dollars", 12.0, mock_chat_json)
+        self.assertEqual(result["budget"], 12.0)
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_budget_stated_with_a_dollar_sign_is_kept(self, mock_chat_json):
+        result = self._extract("bread for under $8", 8.0, mock_chat_json)
+        self.assertEqual(result["budget"], 8.0)
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_budget_stated_in_words_is_kept(self, mock_chat_json):
+        result = self._extract("I've got fifteen dollars and need bread", 15.0, mock_chat_json)
+        self.assertEqual(result["budget"], 15.0)
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_budget_from_an_earlier_user_message_is_kept(self, mock_chat_json):
+        mock_chat_json.return_value = {"ready": True, "items": ["bread"], "missing": "", "budget": 20.0}
+        result = _extract_list([
+            {"role": "user", "content": "I have 20 dollars to spend"},
+            {"role": "assistant", "content": "Great, what do you need?"},
+            {"role": "user", "content": "I need bread"},
+        ])
+        self.assertEqual(result["budget"], 20.0)
+
+
+class TestExtractListMovesVagueItemsToMissing(unittest.TestCase):
+    """"a drink to go with it" isn't something a store search box can find. It must
+    surface as an open question (the UI shows `missing` as a note), not ride along
+    as an item that then prices as whatever "drink" happens to match."""
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_vague_drink_is_removed_from_items_and_named_in_missing(self, mock_chat_json):
+        mock_chat_json.return_value = {
+            "ready": True, "items": ["cheese", "bread", "drink"], "missing": "", "budget": None,
+        }
+        result = _extract_list([{"role": "user", "content": "a sandwich with cheese and bread plus a drink"}])
+
+        self.assertEqual(result["items"], ["cheese", "bread"])
+        self.assertTrue(result["ready"])
+        self.assertIn("drink", result["missing"])
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_a_list_of_only_vague_items_is_not_ready(self, mock_chat_json):
+        mock_chat_json.return_value = {
+            "ready": True, "items": ["snack"], "missing": "", "budget": None,
+        }
+        result = _extract_list([{"role": "user", "content": "I want a snack"}])
+
+        self.assertEqual(result["items"], [])
+        self.assertFalse(result["ready"])
+        self.assertIn("snack", result["missing"])
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_a_model_supplied_missing_note_is_kept_alongside(self, mock_chat_json):
+        mock_chat_json.return_value = {
+            "ready": True, "items": ["bread", "dessert"], "missing": "how many people", "budget": None,
+        }
+        result = _extract_list([{"role": "user", "content": "bread and a dessert"}])
+
+        self.assertIn("how many people", result["missing"])
+        self.assertIn("dessert", result["missing"])
+
+    @patch("scraper.chat_assistant.ollama_client.chat_json")
+    def test_specific_items_are_never_treated_as_vague(self, mock_chat_json):
+        mock_chat_json.return_value = {
+            "ready": True, "items": ["orange juice", "potato chips", "chocolate cake"],
+            "missing": "", "budget": None,
+        }
+        result = _extract_list([{"role": "user", "content": "orange juice, potato chips and chocolate cake"}])
+
+        self.assertEqual(result["items"], ["orange juice", "potato chips", "chocolate cake"])
+        self.assertEqual(result["missing"], "")
+
+
 class TestExtractListConfirmationAgainstRealModel(unittest.TestCase):
     """
     Live tests against the real local Ollama model (not mocked) — this is exactly the
@@ -300,20 +443,33 @@ class TestPriceFromSavedUsesJudge(unittest.TestCase):
 
     @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
     def test_judge_picks_the_real_grocery_item_not_the_cheaper_dip(self, mock_pick):
-        # "Sharp Cheddar Cheese" is candidate index 1 in cheapest-first order
-        # (Cheese Dip at $2.50 comes first) -- the judge says so explicitly
-        # here; the real disambiguation judgment is covered by the live test
-        # below.
-        mock_pick.return_value = [1]
+        # Candidates are ranked, not just cheapest-first: "Sharp Cheddar Cheese"
+        # ends in the word "cheese" and "Cheese Dip" doesn't, so the real cheese is
+        # candidate 0 even though the dip is $1.50 cheaper. The judge says so
+        # explicitly here; the real disambiguation judgment is covered by the live
+        # test below.
+        mock_pick.return_value = [0]
 
         findings, unresolved = _price_from_saved(["cheese"], max_age_hours=999999, context="dinner")
 
         self.assertEqual(unresolved, [])
         self.assertEqual(findings["cheese"][0]["name"], "Sharp Cheddar Cheese")
+        candidate_names = [c["name"] for c in mock_pick.call_args[0][2][0]["candidates"]]
+        self.assertEqual(candidate_names, ["Sharp Cheddar Cheese", "Cheese Dip"])
         # Context and the item list both reach the judge, not just the term.
         args, kwargs = mock_pick.call_args
         self.assertEqual(args[0], "dinner")
         self.assertEqual(args[1], ["cheese"])
+
+    @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
+    def test_the_judges_pick_wins_over_the_ranking(self, mock_pick):
+        # Ranking only decides who gets into the judge's short list and in what
+        # order; the judge still has the final say.
+        mock_pick.return_value = [1]
+
+        findings, _unresolved = _price_from_saved(["cheese"], max_age_hours=999999, context="a party dip")
+
+        self.assertEqual(findings["cheese"][0]["name"], "Cheese Dip")
 
     @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
     def test_judge_saying_no_good_match_marks_item_unresolved(self, mock_pick):
@@ -417,6 +573,87 @@ class TestPriceFromSavedRetriesUnresolvedItemsSolo(unittest.TestCase):
         self.assertEqual(unresolved, ["orange juice"])
         self.assertNotIn("orange juice", findings)
         self.assertEqual(mock_pick.call_count, 2)
+
+
+def _crowded_cheese_fixture():
+    # Nine cheap "cheese" look-alikes (a prepared-foods mac-and-cheese line) and two
+    # real, pricier cheeses. Cheapest-first, the judge's 8-candidate window is all junk.
+    junk = [
+        {"name": f"Cheese Club Mac & Cheese Flavor {i}", "price": 0.50 + i * 0.05,
+         "unit": None, "department": "prepared-foods"}
+        for i in range(9)
+    ]
+    real = [
+        {"name": "Sharp Cheddar Cheese", "price": 4.00, "unit": None, "department": "dairy"},
+        {"name": "Mild Swiss Cheese", "price": 3.50, "unit": None, "department": "dairy"},
+    ]
+    return {
+        "scraped_at": "2026-01-01T00:00:00+00:00",
+        "location": "Test City",
+        "stores": [{"name": "Test Store", "url": "https://example.com",
+                    "product_count": len(junk) + len(real), "products": junk + real}],
+    }
+
+
+class TestPriceFromSavedShowsTheJudgeTheRealItemsFirst(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        fixture_path = Path(self._tmpdir.name) / "prices.json"
+        fixture_path.write_text(json.dumps(_crowded_cheese_fixture()))
+        price_lookup.set_prices_path(fixture_path)
+
+    def tearDown(self):
+        price_lookup.set_prices_path(None)
+        self._tmpdir.cleanup()
+
+    @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
+    def test_real_cheese_is_in_the_candidate_list_despite_cheaper_look_alikes(self, mock_pick):
+        mock_pick.return_value = [0]
+
+        findings, _unresolved = _price_from_saved(["cheese"], max_age_hours=999999)
+
+        candidate_names = [c["name"] for c in mock_pick.call_args[0][2][0]["candidates"]]
+        self.assertEqual(candidate_names[:2], ["Mild Swiss Cheese", "Sharp Cheddar Cheese"])
+        self.assertEqual(findings["cheese"][0]["name"], "Mild Swiss Cheese")
+
+
+class TestPriceFromSavedSurvivesAFailingJudge(unittest.TestCase):
+    """Caught live: a 10-item list returned an HTML 500 after 300 seconds -- the
+    judge call timed out and nothing caught the OllamaError. A judge that can't
+    answer should degrade to its own fallback (the best-ranked candidate), not
+    take the whole request down."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        fixture_path = Path(self._tmpdir.name) / "prices.json"
+        fixture_path.write_text(json.dumps(_MULTI_ITEM_FIXTURE))
+        price_lookup.set_prices_path(fixture_path)
+
+    def tearDown(self):
+        price_lookup.set_prices_path(None)
+        self._tmpdir.cleanup()
+
+    @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
+    def test_judge_timeout_falls_back_to_the_best_ranked_candidate(self, mock_pick):
+        mock_pick.side_effect = OllamaError("Ollama timed out after 300s.")
+
+        findings, unresolved = _price_from_saved(["bread", "cheese", "orange juice"], max_age_hours=999999)
+
+        self.assertEqual(unresolved, [])
+        self.assertEqual(findings["bread"][0]["name"], "White Bread")
+        self.assertEqual(findings["cheese"][0]["name"], "Cheddar Cheese")
+        self.assertEqual(findings["orange juice"][0]["name"], "Orange Juice")
+        # One failed batch call, and no solo retries piled on top of a dead judge.
+        self.assertEqual(mock_pick.call_count, 1)
+
+    @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
+    def test_items_with_no_candidates_are_still_unresolved_when_the_judge_fails(self, mock_pick):
+        mock_pick.side_effect = OllamaError("boom")
+
+        findings, unresolved = _price_from_saved(["bread", "diapers"], max_age_hours=999999)
+
+        self.assertIn("bread", findings)
+        self.assertEqual(unresolved, ["diapers"])
 
 
 class TestPriceFromSavedJudgeAgainstRealModel(unittest.TestCase):

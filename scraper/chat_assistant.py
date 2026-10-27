@@ -99,11 +99,14 @@ Every item in your answer must trace back to something the user actually wrote b
 use null -- do NOT invent a plausible-sounding number. "I need milk" with nothing else
 said about money means budget is null, not a guessed figure like 15 or 20.
 
-You will be given only the USER's own messages, concatenated across the whole
-conversation — the assistant's replies are deliberately left out. Build the list from
-these user messages alone. A dish or ingredient named in an earlier message counts just
+Each request you receive is ONE conversation: the user's own messages from it joined
+together with " | " — the assistant's replies are deliberately left out. Build the list
+from those messages alone. A dish or ingredient named in an earlier message counts just
 as much as one named in the latest message — combine everything the user has asked for
-across every message into one list, not just the most recent one.
+across all the messages INSIDE that one request into one list, not just the most recent
+one. This applies only within the single request in front of you: earlier requests in
+this chat are separate, already-finished examples from other people, and nothing from
+them — no item, no budget, no diet word — ever carries over into a later request.
 
 If the assistant previously suggested dishes, ingredients, or options, those suggestions
 are NOT shown to you here and must NOT appear in "items" unless the user's own words
@@ -173,8 +176,9 @@ Rules:
 - Do NOT suggest splitting the trip across multiple stores or compute any cross-store
   total yourself. Only ever report a single store's total (from "store_totals"). This
   is a one-stop-shop recommendation only.
-- If "budget" is not null, compare it against the one-stop total. Say clearly whether
-  it fits, and by how much. If it doesn't fit anywhere, say so and suggest which item(s)
+- If "budget" is not null, compare it against the one-stop total. A budget of 0 is a
+  real budget (the user has no money to spend), not "no budget" -- say plainly that
+  nothing fits. Say clearly whether it fits, and by how much. If it doesn't fit anywhere, say so and suggest which item(s)
   to drop to get under budget. Actually subtract the item(s) you're proposing to drop
   from the total and confirm in your own reasoning that what's LEFT is under budget
   before you say it -- don't just name the priciest item, since one item alone may not
@@ -194,6 +198,42 @@ def _parse_budget(raw) -> float | None:
         return round(float(raw), 2) if raw is not None else None
     except (TypeError, ValueError):
         return None
+
+
+_NUMBER_WORDS = re.compile(
+    r"\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|"
+    r"thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)\b",
+    re.IGNORECASE,
+)
+_MONEY_CUES = re.compile(
+    r"\$|\b(dollars?|bucks?|cents?|budget|spend|afford|under|limit|max|cap)\b", re.IGNORECASE,
+)
+
+# Generic words that name a kind of thing, not a product a store search can find.
+_VAGUE_ITEMS = frozenset({
+    "drink", "drinks", "beverage", "beverages", "snack", "snacks", "dessert", "desserts",
+    "treat", "treats", "side", "sides", "food", "foods", "something", "stuff",
+})
+
+# Wording matters a lot here. A longer fence ("...carry NONE of it over. Use only what
+# is written below.") fixed the leak but made the model include a REJECTED proposal's
+# items, since the proposal sits below it in the same turn; this shorter one fixed the
+# leak without that side effect (checked against the real model, both directions).
+_NEW_CONVERSATION_FENCE = (
+    "NEW conversation, unrelated to the examples above. "
+    "Do not reuse any of their items or budgets.\n"
+)
+
+
+def _states_an_amount(text: str) -> bool:
+    """
+    True if the user's words contain a spending amount: any digit, or a number word
+    alongside a money cue ("fifteen dollars", "forty bucks"). A bare number word like
+    "one loaf of bread" doesn't count.
+    """
+    if re.search(r"\d", text):
+        return True
+    return bool(_NUMBER_WORDS.search(text) and _MONEY_CUES.search(text))
 
 
 def _extract_list(history: list[dict]) -> dict:
@@ -219,8 +259,13 @@ def _extract_list(history: list[dict]) -> dict:
     if last_user_idx and history[last_user_idx - 1]["role"] == "assistant":
         last_proposal = history[last_user_idx - 1]["content"]
 
-    def _turn(user_wants: str, proposal: str | None = None) -> dict:
-        parts = [f"Everything the user has asked for, across all their messages:\n{user_wants}"]
+    def _turn(user_wants: str, proposal: str | None = None, fresh: bool = False) -> dict:
+        parts = []
+        if fresh:
+            # The worked examples above are earlier chat turns, so without this the
+            # model reads their users' items and budgets as part of THIS user's talk.
+            parts.append(_NEW_CONVERSATION_FENCE)
+        parts.append(f"Everything the user has asked for, across all their messages:\n{user_wants}")
         if proposal:
             parts.append(
                 "\nThe assistant's most recent suggestion, shown only because the user's own "
@@ -307,7 +352,7 @@ def _extract_list(history: list[dict]) -> dict:
             {"role": "assistant", "content": demo5_output},
             _turn(demo6_input),
             {"role": "assistant", "content": demo6_output},
-            _turn(wants, last_proposal),
+            _turn(wants, last_proposal, fresh=True),
         ],
         system=EXTRACT_SYSTEM_PROMPT,
     )
@@ -325,12 +370,25 @@ def _extract_list(history: list[dict]) -> dict:
             seen.add(key)
             deduped.append(item.lower())
 
-    budget = _parse_budget(result.get("budget"))
+    # Words like "a drink" aren't something a store search can find, and left in
+    # `items` they price as whatever "drink" happens to match (a powdered mix).
+    # Pull them out and name them in `missing` so the UI can ask instead.
+    vague = [i for i in deduped if i in _VAGUE_ITEMS]
+    deduped = [i for i in deduped if i not in _VAGUE_ITEMS]
+    missing = str(result.get("missing") or "")
+    if vague:
+        note = f"what kind of {' and '.join(vague)} you want"
+        missing = f"{missing}; {note}" if missing else note
+
+    # The model has no reliable memory for "no money was mentioned" -- it kept
+    # inventing a budget (the 15 from a worked example). A budget only counts if
+    # the user's own words contain an amount.
+    budget = _parse_budget(result.get("budget")) if _states_an_amount(wants) else None
 
     return {
         "ready": bool(result.get("ready")) and bool(deduped),
         "items": deduped,
-        "missing": str(result.get("missing") or ""),
+        "missing": missing,
         "budget": budget,
     }
 
@@ -367,7 +425,13 @@ def _price_from_saved(items: list[str], max_age_hours: int, context: str = "") -
 
     # All matches per item, gathered once and reused both for the judge's
     # candidate list and (after judging) for the chosen product's own pricing.
-    all_rows = {item: price_lookup.query_prices(item, limit=0) for item in items}
+    # Ranked best-first, not just cheapest-first, so cheap look-alikes (a mac-and-
+    # cheese for "cheese", a candy bar for "milk") can't fill the judge's short
+    # candidate list ahead of the real item.
+    all_rows = {
+        item: price_lookup.rank_candidates(item, price_lookup.query_prices(item, limit=0))
+        for item in items
+    }
 
     batch = []
     item_candidate_names: dict[str, list[str]] = {}
@@ -380,7 +444,7 @@ def _price_from_saved(items: list[str], max_age_hours: int, context: str = "") -
                 break
         item_candidate_names[item] = names
         candidates = [
-            next(r for r in all_rows[item] if r["name"] == name)  # cheapest instance of this name
+            min((r for r in all_rows[item] if r["name"] == name), key=lambda r: r["price"])
             for name in names
         ]
         batch.append({
@@ -388,11 +452,21 @@ def _price_from_saved(items: list[str], max_age_hours: int, context: str = "") -
             "candidates": [{"name": c["name"], "price": c["price"], "unit": c["unit"]} for c in candidates],
         })
 
-    picks = (
-        product_matcher.pick_best_matches(context or "a grocery shopping list", items, batch, model=JUDGE_MODEL)
-        if any(item_candidate_names[item] for item in items)
-        else [None] * len(items)
-    )
+    judge_failed = False
+    if any(item_candidate_names[item] for item in items):
+        try:
+            picks = product_matcher.pick_best_matches(
+                context or "a grocery shopping list", items, batch, model=JUDGE_MODEL,
+            )
+        except OllamaError as e:
+            # A judge that can't answer (a stuck call, Ollama down) shouldn't take the
+            # whole request down -- it used to surface as an HTML 500 after 5 minutes.
+            # Candidates are ranked best-first, so index 0 is a sound fallback.
+            print(f"[nova] Judge unavailable ({e}); using the best-ranked candidate for each item.")
+            picks = [0 if item_candidate_names[item] else None for item in items]
+            judge_failed = True
+    else:
+        picks = [None] * len(items)
 
     findings: dict[str, list[dict]] = {}
     unresolved: list[str] = []
@@ -415,13 +489,16 @@ def _price_from_saved(items: list[str], max_age_hours: int, context: str = "") -
     # genuinely had candidates one solo retry before giving up on it -- juggling
     # multiple ingredients at once seems to be what trips up the judge, not the
     # candidate itself.
-    if len(items) > 1:
+    if len(items) > 1 and not judge_failed:
         for item in [i for i in unresolved if item_candidate_names[i]]:
             names = item_candidate_names[item]
             solo_batch = [b for b in batch if b["ingredient"] == item]
-            solo_pick = product_matcher.pick_best_matches(
-                context or "a grocery shopping list", [item], solo_batch, model=JUDGE_MODEL,
-            )[0]
+            try:
+                solo_pick = product_matcher.pick_best_matches(
+                    context or "a grocery shopping list", [item], solo_batch, model=JUDGE_MODEL,
+                )[0]
+            except OllamaError:
+                continue
             if solo_pick is None:
                 continue
             chosen_name = names[solo_pick]
@@ -500,7 +577,11 @@ def _store_basket_totals(findings: dict, all_items: list[str]) -> list[dict]:
             "missing_items": [i for i in all_items if i not in prices],
             "total": round(sum(prices[i] for i in covered), 2),
         })
-    totals.sort(key=lambda r: (not r["covers_all_items"], r["total"]))
+    # Full coverage first, then the most items covered, then cheapest. Without the
+    # middle key, a store covering 1 of 6 items sorted ahead of stores covering 3
+    # just because it had less on its bill -- exactly the "bargain" the docstring
+    # says a partial store must not pass as.
+    totals.sort(key=lambda r: (not r["covers_all_items"], -r["items_covered"], r["total"]))
     return totals
 
 

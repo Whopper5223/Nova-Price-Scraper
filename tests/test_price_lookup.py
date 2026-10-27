@@ -171,3 +171,110 @@ class TestNonGroceryDepartmentsExcluded(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _row(name, price, category=None, store="Test Store"):
+    return {"store_name": store, "name": name, "price": price, "category": category}
+
+
+class TestHeadMatches(unittest.TestCase):
+    """Does the search phrase end the product's name -- is it the thing being
+    sold, rather than an ingredient or flavor mentioned along the way?"""
+
+    def test_phrase_at_the_end_of_the_name_matches(self):
+        self.assertTrue(price_lookup.head_matches("bread", "L'oven Fresh White Bread"))
+        self.assertTrue(price_lookup.head_matches("milk", "Friendly Farms 2% Milk"))
+        self.assertTrue(price_lookup.head_matches("orange juice", "Store Brand Orange Juice, Original"))
+
+    def test_size_and_count_suffixes_are_ignored(self):
+        self.assertTrue(price_lookup.head_matches("bananas", "Bananas, per lb"))
+        self.assertTrue(price_lookup.head_matches("rice", "Long Grain White Rice 2 lb"))
+        self.assertTrue(price_lookup.head_matches("bread", "Sandwich Bread - 24 oz"))
+        self.assertTrue(price_lookup.head_matches("yogurt", "Vanilla Greek Yogurt (32 oz)"))
+
+    def test_word_followed_by_another_noun_does_not_match(self):
+        self.assertFalse(price_lookup.head_matches("bread", "Italian Style Bread Crumbs"))
+        self.assertFalse(price_lookup.head_matches("milk", "SNICKERS Milk Chocolate Candy Bar"))
+        self.assertFalse(price_lookup.head_matches("chips", "Chocolate Chip Chewy Granola Bars"))
+
+    def test_anything_after_a_with_clause_is_ignored(self):
+        self.assertFalse(price_lookup.head_matches(
+            "cheese", "Chef's Cupboard Potatoes Au Gratin with Cheddar Cheese Sauce"))
+        self.assertFalse(price_lookup.head_matches(
+            "butter", "Chef's Cupboard Buttery Mashed Potatoes with Real Butter"))
+
+    def test_a_flavor_or_mix_name_is_not_the_plain_item(self):
+        self.assertFalse(price_lookup.head_matches(
+            "rice", "Earthly Grains Chicken Flavored Rice & Vermicelli Mix"))
+        self.assertFalse(price_lookup.head_matches(
+            "olive oil", "Earthly Grains Roasted Garlic & Olive Oil Couscous Mix"))
+
+
+class TestRankCandidates(unittest.TestCase):
+    """Rows are ranked best-first for the judge's short candidate list. Plain
+    cheapest-first let cheap junk crowd the real item out: with every category in
+    play, "cheese" is a $0.65 mac-and-cheese, "milk" a candy bar, "bread" crumbs."""
+
+    def test_the_real_category_beats_a_cheaper_look_alike(self):
+        rows = [
+            _row("Cheese Club Original Mac & Cheese", 0.65, "Pasta & Dry Goods"),
+            _row("Sharp Cheddar Cheese", 4.00, "Cheese"),
+        ]
+        ranked = price_lookup.rank_candidates("cheese", rows)
+        self.assertEqual(ranked[0]["name"], "Sharp Cheddar Cheese")
+
+    def test_milk_ranks_real_milk_above_candy_and_evaporated_milk(self):
+        rows = [
+            _row("SNICKERS Milk Chocolate Candy Bar", 0.99, "Snacks"),
+            _row("Baker's Corner Evaporated Milk", 1.05, "Baking Essentials"),
+            _row("Friendly Farms Whole Milk", 2.37, "Milk"),
+        ]
+        ranked = price_lookup.rank_candidates("milk", rows)
+        self.assertEqual(ranked[0]["name"], "Friendly Farms Whole Milk")
+
+    def test_bread_ranks_bread_above_bread_crumbs(self):
+        rows = [
+            _row("Italian Style Bread Crumbs", 1.29, "Oils & Spices"),
+            _row("White Sandwich Bread", 1.99, "Bread"),
+        ]
+        ranked = price_lookup.rank_candidates("bread", rows)
+        self.assertEqual(ranked[0]["name"], "White Sandwich Bread")
+
+    def test_without_a_category_hint_the_name_still_separates_the_item_from_a_mix(self):
+        rows = [
+            _row("Roasted Garlic & Olive Oil Couscous Mix", 1.99, "Pasta & Dry Goods"),
+            _row("Extra Virgin Olive Oil", 5.99, "Oils & Spices"),
+        ]
+        ranked = price_lookup.rank_candidates("olive oil", rows)
+        self.assertEqual(ranked[0]["name"], "Extra Virgin Olive Oil")
+
+    def test_chips_ranks_potato_chips_above_chocolate_chip_bars(self):
+        rows = [
+            _row("Chocolate Chip Chewy Dipped Granola Bars", 1.89, "Snacks"),
+            _row("Kettle Potato Chips", 2.99, "Snacks"),
+        ]
+        ranked = price_lookup.rank_candidates("chips", rows)
+        self.assertEqual(ranked[0]["name"], "Kettle Potato Chips")
+
+    def test_price_still_orders_rows_within_the_same_tier(self):
+        rows = [
+            _row("Sharp Cheddar Cheese", 4.00, "Cheese"),
+            _row("Mild Swiss Cheese", 2.50, "Cheese"),
+        ]
+        ranked = price_lookup.rank_candidates("cheese", rows)
+        self.assertEqual([r["name"] for r in ranked], ["Mild Swiss Cheese", "Sharp Cheddar Cheese"])
+
+    def test_with_no_signal_at_all_it_is_plain_cheapest_first(self):
+        rows = [_row("Zeta Widget Stuff", 3.00, "Frozen"), _row("Alpha Widget Stuff", 1.00, "Frozen")]
+        ranked = price_lookup.rank_candidates("widget", rows)
+        self.assertEqual([r["price"] for r in ranked], [1.00, 3.00])
+
+    def test_no_rows_are_dropped_or_added(self):
+        rows = [
+            _row("Cheese Club Original Mac & Cheese", 0.65, "Pasta & Dry Goods"),
+            _row("Sharp Cheddar Cheese", 4.00, "Cheese"),
+            _row("Cheese Pizza", 3.00, "Frozen"),
+        ]
+        ranked = price_lookup.rank_candidates("cheese", rows)
+        self.assertEqual(sorted(r["name"] for r in ranked), sorted(r["name"] for r in rows))
+

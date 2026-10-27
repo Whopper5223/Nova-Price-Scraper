@@ -142,15 +142,20 @@ def chat():
 
 @app.post("/api/price")
 def price():
-    body = request.get_json(silent=True) or {}
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "request body must be a JSON object"}), 400
     sess = _get_session()
+    raw_items = body.get("items", [])
+    # A string would be iterated into single letters ("milk" -> m, i, l, k) and
+    # numbers coerced and fuzzy-matched ("2" -> 2% milk), each costing real LLM time.
+    if not isinstance(raw_items, list) or not all(isinstance(i, str) for i in raw_items):
+        return jsonify({"error": "items must be a list of strings"}), 400
     # dict.fromkeys dedupes while preserving first-occurrence order -- a caller
     # sending a case-variant duplicate (e.g. "milk" and "Milk") would otherwise
     # double-count that item's price in _store_basket_totals, which pivots on
     # the lowercased item string as a dict key.
-    items = list(dict.fromkeys(
-        str(i).strip().lower() for i in body.get("items", []) if str(i).strip()
-    ))
+    items = list(dict.fromkeys(i.strip().lower() for i in raw_items if i.strip()))
     budget = body.get("budget", sess.get("budget"))
     if budget is not None:
         try:
@@ -169,9 +174,8 @@ def price():
     else:
         saved_findings, unresolved = _price_from_saved(items, CONFIG["max_age_hours"], context=request_text)
 
-    # Live Instacart fallback disabled for the 5-category demo: it searches
-    # Instacart directly and isn't restricted to Cheese/Milk/Bread/Produce/
-    # Beverages, so it could return a price with no markup data behind it.
+    # Live Instacart fallback stays disabled: it searches Instacart directly, so
+    # a price from it has no real-world markup data behind it.
     # Re-enable by restoring the asyncio.run(_price_live(...)) call below.
     live_findings = {}
     live_error = None
@@ -181,7 +185,10 @@ def price():
     findings = {**saved_findings, **live_findings}
     missing = [i for i in items if i not in findings]
 
-    summary = _summarize(request_text, findings, missing, items, budget)
+    # Not request_text: that's the conversation's first message, which can still
+    # name an item the user removed from the list or carry an old turn's text, and
+    # the summary model dutifully talks about both.
+    summary = _summarize(f"Price check for: {', '.join(items)}", findings, missing, items, budget)
     store_totals = _store_basket_totals(findings, items)
 
     sess["history"].clear()

@@ -163,6 +163,20 @@ def classify(name: str, department: str | None) -> str | None:
     return None
 
 
+# Departments classify() splits by keyword rather than taking whole.
+_KEYWORD_SPLIT_DEPARTMENTS = ("dairy", "baked-goods", "breakfast-foods", "meat-and-seafood")
+
+
+def categories_for_term(term: str) -> set[str]:
+    """
+    The categories a search word itself points at, using the same keyword rules
+    classify() applies to product names: "cheese" -> {"Cheese"}, "chicken breast"
+    -> {"Chicken"}. Empty for words only a whole department covers ("bananas",
+    "orange juice", "rice"), since nothing about the word names a category.
+    """
+    return {c for d in _KEYWORD_SPLIT_DEPARTMENTS if (c := classify(term, d))}
+
+
 # Market Basket's sheet has one combined MEAT/FISH row (a single matched item)
 # instead of separate beef/chicken/fish rows, so that one number covers each.
 _MARKET_BASKET_MEAT_FISH = (0.2505, 1)

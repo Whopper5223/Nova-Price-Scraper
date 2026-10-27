@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from scraper.product_matcher import pick_best_matches, _batches, BATCH_SIZE
+from scraper.product_matcher import pick_best_matches, _batches, BATCH_SIZE, JUDGE_TIMEOUT_SECONDS
 
 
 class TestBatches(unittest.TestCase):
@@ -154,3 +154,18 @@ class TestPickBestMatches(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestJudgeCallsAreBoundedInTime(unittest.TestCase):
+    @patch("scraper.product_matcher.ollama_client.chat_json")
+    def test_the_judge_call_carries_a_short_timeout(self, mock_chat_json):
+        # The judge normally answers in seconds. Left on the 300s default, one
+        # stuck call held a whole pricing request for five minutes.
+        mock_chat_json.return_value = {"choices": [{"index": 0}]}
+        batch = [{"ingredient": "milk", "candidates": [{"name": "Whole Milk"}]}]
+
+        pick_best_matches("dinner", ["milk"], batch)
+
+        self.assertEqual(mock_chat_json.call_args.kwargs["timeout"], JUDGE_TIMEOUT_SECONDS)
+        self.assertLessEqual(JUDGE_TIMEOUT_SECONDS, 90)
+

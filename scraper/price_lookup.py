@@ -16,6 +16,7 @@ is the source of truth.
 """
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -116,6 +117,63 @@ def query_prices(term: str, limit: int = 20, path: Path | None = None) -> list[d
 
     matches.sort(key=lambda p: p["price"])
     return matches[:limit] if limit > 0 else matches
+
+
+# Trailing size/count noise on a product name ("2 lb", "- 24 oz", "(32 oz)").
+_SIZE_SUFFIX = re.compile(
+    r"\s+\d+(?:\.\d+)?\s*(?:fl\s*oz|oz|lbs?|ct|count|pk|pack|gal|gallon|ml|kg|l|g)\b.*$",
+    re.IGNORECASE,
+)
+
+
+def _head_of(name: str) -> str:
+    """The part of a product name that says what the product IS: before the first
+    comma, before any "with ..." clause, minus trailing sizes."""
+    head = name.split(",")[0]
+    head = re.split(r"\s+with\s+", head, maxsplit=1, flags=re.IGNORECASE)[0]
+    head = re.sub(r"\s*\(.*$", "", head)
+    head = re.sub(r"\s*[-–]\s*\d.*$", "", head)
+    return _SIZE_SUFFIX.sub("", head)
+
+
+def head_matches(term: str, name: str) -> bool:
+    """
+    True if the search phrase ends the product's name, i.e. it's the thing being
+    sold rather than an ingredient or flavor mentioned along the way: "White
+    Bread" is bread, "Italian Style Bread Crumbs" is crumbs; "Orange Juice" is
+    juice, "Garlic & Olive Oil Couscous Mix" is a couscous mix.
+    """
+    wanted = product_embeddings.word_stems(term)
+    if not wanted:
+        return False
+    return product_embeddings.word_stems(_head_of(name))[-len(wanted):] == wanted
+
+
+def rank_candidates(term: str, rows: list[dict]) -> list[dict]:
+    """
+    `rows` (every match for `term`) ordered best-first, for the judge's short
+    candidate list. Plain cheapest-first let cheap look-alikes crowd the real
+    item out -- with every category in play, "cheese" is a $0.65 mac-and-cheese,
+    "milk" a candy bar, "bread" a box of crumbs. Tiers, best first:
+      0  in the category the word itself names (cheese -> Cheese) AND the word
+         ends the product's name
+      1  in that category
+      2  the word ends the product's name
+      3  everything else
+    Cheapest first within a tier. Rows are only reordered, never dropped.
+    """
+    named = markup_data.categories_for_term(term)
+
+    def tier(row: dict) -> int:
+        in_category = row.get("category") in named
+        is_head = head_matches(term, row["name"])
+        if in_category and is_head:
+            return 0
+        if in_category:
+            return 1
+        return 2 if is_head else 3
+
+    return sorted(rows, key=lambda r: (tier(r), r["price"]))
 
 
 def cheapest_per_store(rows: list[dict]) -> list[dict]:

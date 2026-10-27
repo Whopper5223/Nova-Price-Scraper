@@ -133,6 +133,11 @@ def matches_query(name: str, query: str) -> bool:
     return all(_stem(tok) in name_words for tok in _WORD_RE.findall(query))
 
 
+def word_stems(text: str) -> list[str]:
+    """`text` as an ordered list of stemmed words, tokenized the same way matches_query does."""
+    return [_stem(w) for w in _WORD_RE.findall(text)]
+
+
 def get_embedding(product_name: str, model: str = DEFAULT_EMBED_MODEL) -> list[float]:
     """
     Embedding for `product_name`, from the SQLite cache if present, otherwise

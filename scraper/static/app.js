@@ -23,7 +23,7 @@ function escapeHtml(value) {
 // Minimal, safe markdown rendering for model replies. Escapes the raw text
 // FIRST (same rule as every other untrusted string in this file), then
 // applies only the two markdown features the model actually uses -- bold and
-// bullet lists -- on top of the already-escaped string. Never treats raw
+// bullet lists ("- " or "* ") -- on top of the already-escaped string. Never treats raw
 // text as HTML.
 function renderMarkdown(text) {
   const escaped = escapeHtml(text);
@@ -32,7 +32,7 @@ function renderMarkdown(text) {
   const htmlLines = [];
   let inList = false;
   for (const line of withBold.split("\n")) {
-    const bullet = line.match(/^-\s+(.*)/);
+    const bullet = line.match(/^[-*]\s+(.*)/);
     if (bullet) {
       if (!inList) {
         htmlLines.push("<ul>");
@@ -127,15 +127,16 @@ function renderPills() {
 function renderStoreTotals(storeTotals, budget) {
   if (!storeTotals || !storeTotals.length) return "";
 
-  // storeTotals is already sorted one-stop-coverage-first, then cheapest
-  // first, so the top 2 rows ARE the two cheapest options as-is.
+  // storeTotals is already sorted full-coverage first, then most items covered,
+  // then cheapest. Only a store that has the whole list can be "cheapest" -- a
+  // store missing half the items is cheap because it has less on the bill.
   const oneStop = storeTotals.find((s) => s.covers_all_items);
   const rankLabels = ["cheapest", "2nd cheapest"];
   const rows = storeTotals.map((s, index) => {
-    const rank = index < rankLabels.length ? rankLabels[index] : null;
+    const rank = s.covers_all_items && index < rankLabels.length ? rankLabels[index] : null;
     const coverage = s.covers_all_items
       ? "has everything"
-      : `missing ${escapeHtml(s.missing_items.join(", "))}`;
+      : `${s.items_covered} of ${s.items_total} items — missing ${escapeHtml(s.missing_items.join(", "))}`;
     return `
       <div class="store-row${rank ? " store-row--best" : ""}">
         <div>
@@ -193,7 +194,7 @@ function renderResults(payload) {
     ${missingHtml}
     ${errorHtml}
     ${renderStoreTotals(store_totals, budget)}
-    <div class="summary">${escapeHtml(summary)}</div>
+    <div class="summary">${renderMarkdown(summary)}</div>
   `;
   resultsEl.hidden = false;
   resultsEl.scrollIntoView({ behavior: "smooth", block: "nearest" });

@@ -14,6 +14,11 @@ from scraper import ollama_client
 
 BATCH_SIZE = 25
 
+# The judge normally answers in a few seconds. On the default 300s client timeout a
+# single stuck call held a whole pricing request for five minutes and then failed it;
+# a short bound lets callers fall back to the best-ranked candidate instead.
+JUDGE_TIMEOUT_SECONDS = 60
+
 PICK_BEST_MATCH_SYSTEM_PROMPT = """You are a grocery-matching judge. For each grocery ingredient from a recipe, you are given a numbered list of candidate products (already narrowed down by a lexical search) and must pick the single candidate that is the best real-world match for that ingredient — or say that none of them fit.
 
 You also get the recipe's name and its full ingredient list. Use that context to disambiguate: if two candidates are both plausible for the ingredient word alone, pick whichever fits the dish. For example, "milk" in a savory recipe's ingredient list should prefer a plain milk candidate over a flavored one (chocolate milk, strawberry milk, etc.) if both are present — a baking recipe that also lists "cocoa powder" might go the other way. Never pick a candidate that is really a different food just because it's the closest word match; if nothing on the list is truly the ingredient, say so.
@@ -107,6 +112,7 @@ def _judge_batch(
         ],
         system=PICK_BEST_MATCH_SYSTEM_PROMPT,
         model=model,
+        timeout=JUDGE_TIMEOUT_SECONDS,
     )
 
     def _cheapest(item) -> int | None:

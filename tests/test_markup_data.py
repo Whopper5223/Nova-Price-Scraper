@@ -162,6 +162,34 @@ class TestClassifyMeatAndSeafood(unittest.TestCase):
         self.assertIsNone(markup_data.classify("Hickory Smoked Bacon", "meat-and-seafood"))
 
 
+class TestCategoriesForTerm(unittest.TestCase):
+    """The categories a search word itself points at, derived from the same
+    keyword rules classify() uses -- so "cheese" means the Cheese category, not
+    the mac-and-cheese that merely contains the word."""
+
+    def test_staple_words_point_at_their_own_category(self):
+        self.assertEqual(markup_data.categories_for_term("cheese"), {"Cheese"})
+        self.assertEqual(markup_data.categories_for_term("milk"), {"Milk"})
+        self.assertEqual(markup_data.categories_for_term("bread"), {"Bread"})
+        self.assertEqual(markup_data.categories_for_term("butter"), {"Butter & Creamer"})
+        self.assertEqual(markup_data.categories_for_term("yogurt"), {"Yogurt"})
+        self.assertEqual(markup_data.categories_for_term("cereal"), {"Cereal"})
+        self.assertEqual(markup_data.categories_for_term("chicken breast"), {"Chicken"})
+        self.assertEqual(markup_data.categories_for_term("salmon"), {"Fish & Seafood"})
+
+    def test_a_more_specific_phrase_still_finds_its_category(self):
+        self.assertEqual(markup_data.categories_for_term("cheddar cheese"), {"Cheese"})
+        self.assertEqual(markup_data.categories_for_term("whole milk"), {"Milk"})
+
+    def test_words_that_only_a_whole_department_covers_point_nowhere(self):
+        # produce, beverages, frozen etc. are whole departments with no keywords,
+        # so nothing about the word itself says which category it is.
+        self.assertEqual(markup_data.categories_for_term("bananas"), set())
+        self.assertEqual(markup_data.categories_for_term("orange juice"), set())
+        self.assertEqual(markup_data.categories_for_term("olive oil"), set())
+        self.assertEqual(markup_data.categories_for_term("rice"), set())
+
+
 class TestGetMarkupRealNumbers(unittest.TestCase):
     def test_stop_and_shop_beverages(self):
         self.assertEqual(markup_data.get_markup("Stop & Shop", "Beverages"), (0.2228, 18))
