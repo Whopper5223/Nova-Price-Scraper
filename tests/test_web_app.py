@@ -212,5 +212,50 @@ class TestApiPriceInputValidation(unittest.TestCase):
         self.assertIn("JSON", resp.get_json()["error"])
 
 
+class TestConversationSurvivesPricing(unittest.TestCase):
+    """Pricing used to wipe the conversation. The chat on screen still showed it, so
+    a follow-up like "I have 20 bucks" or "for the same thing" reached a model that
+    remembered nothing and asked what you were making."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        fixture_path = Path(self._tmpdir.name) / "prices.json"
+        fixture_path.write_text(json.dumps(_FIXTURE))
+        price_lookup.set_prices_path(fixture_path)
+        web_app.app.config["TESTING"] = True
+        self.client = web_app.app.test_client()
+        with self.client.session_transaction() as sess:
+            sess["sid"] = "keep-sid"
+        self.history = [
+            {"role": "user", "content": "Just something with meat for dinner tonight"},
+            {"role": "assistant", "content": "Grilled chicken with sweet potatoes and broccoli?"},
+        ]
+        web_app.SESSIONS["keep-sid"] = {"history": list(self.history), "budget": 20.0}
+
+    def tearDown(self):
+        price_lookup.set_prices_path(None)
+        self._tmpdir.cleanup()
+        web_app.SESSIONS.pop("keep-sid", None)
+
+    @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
+    @patch("scraper.chat_assistant.ollama_client.chat")
+    def test_the_conversation_and_budget_are_still_there_after_pricing(self, mock_chat, mock_pick):
+        mock_chat.return_value = "stub summary"
+        mock_pick.return_value = [0]
+
+        resp = self.client.post("/api/price", json={"items": ["milk"]})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(web_app.SESSIONS["keep-sid"]["history"], self.history)
+        self.assertEqual(web_app.SESSIONS["keep-sid"]["budget"], 20.0)
+
+    def test_start_over_still_clears_the_conversation(self):
+        resp = self.client.post("/api/reset")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(web_app.SESSIONS["keep-sid"]["history"], [])
+        self.assertIsNone(web_app.SESSIONS["keep-sid"]["budget"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -181,5 +181,36 @@ class TestRenderStoreTotals(unittest.TestCase):
         self.assertEqual(html.count("cheapest"), 1)
 
 
+INDEX_HTML = APP_JS.parent / "index.html"
+
+
+def _handler(source: str, start_marker: str, end_marker: str) -> str:
+    start = source.index(start_marker)
+    return source[start:source.index(end_marker, start)]
+
+
+class TestResultsAndStartOver(unittest.TestCase):
+    """Sending a follow-up used to hide the price results, and there was no way to begin
+    a fresh list now that the conversation is kept after pricing."""
+
+    def setUp(self):
+        self.source = APP_JS.read_text(encoding="utf-8")
+
+    def test_sending_a_message_does_not_hide_the_price_results(self):
+        submit = _handler(self.source, 'composer.addEventListener("submit"', "confirmNo.addEventListener")
+
+        self.assertNotIn("resultsEl.hidden = true", submit)
+
+    def test_there_is_a_start_over_button(self):
+        self.assertIn('id="startOver"', INDEX_HTML.read_text(encoding="utf-8"))
+
+    def test_start_over_resets_the_server_conversation_and_clears_the_screen(self):
+        handler = _handler(self.source, 'startOver.addEventListener("click"', "\n});")
+
+        self.assertIn('fetch("/api/reset"', handler)
+        self.assertIn("resultsEl.hidden = true", handler)
+        self.assertIn("confirmBox.hidden = true", handler)
+
+
 if __name__ == "__main__":
     unittest.main()

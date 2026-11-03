@@ -193,9 +193,9 @@ def price():
     summary = _summarize(f"Price check for: {', '.join(items)}", findings, missing, items, budget)
     store_totals = _store_basket_totals(findings, items)
 
-    sess["history"].clear()
-    sess["budget"] = None
-
+    # The conversation is kept: the chat on screen still shows it, so a follow-up
+    # ("I have 20 bucks", "swap the chicken for fish") has to find it here too. The
+    # user starts a fresh list with the Start over button (POST /api/reset).
     return jsonify({
         "findings": findings,
         "missing": missing,

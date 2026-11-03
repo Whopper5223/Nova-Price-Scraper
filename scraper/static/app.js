@@ -8,6 +8,7 @@ const confirmList = document.getElementById("confirmList");
 const confirmMissing = document.getElementById("confirmMissing");
 const confirmYes = document.getElementById("confirmYes");
 const confirmNo = document.getElementById("confirmNo");
+const startOver = document.getElementById("startOver");
 const resultsEl = document.getElementById("results");
 
 let pendingItems = [];
@@ -232,7 +233,6 @@ composer.addEventListener("submit", async (e) => {
   addMessage("user", message);
   input.value = "";
   confirmBox.hidden = true;
-  resultsEl.hidden = true;
   setBusy(true);
 
   const thinking = addMessage("thinking", "Nova is thinking…");
@@ -296,6 +296,25 @@ confirmYes.addEventListener("click", async () => {
     setBusy(false);
     input.focus();
   }
+});
+
+// Kept after pricing, the conversation carries on in the same chat, so beginning a
+// fresh list is an explicit act: reset the server's copy and clear what's on screen.
+const greeting = chatEl.firstElementChild ? chatEl.firstElementChild.cloneNode(true) : null;
+
+startOver.addEventListener("click", async () => {
+  try {
+    await fetch("/api/reset", { method: "POST" });
+  } catch {
+    // The screen is cleared regardless; the next message would hit a stale server copy.
+  }
+  chatEl.innerHTML = "";
+  if (greeting) chatEl.appendChild(greeting.cloneNode(true));
+  confirmBox.hidden = true;
+  resultsEl.hidden = true;
+  resultsEl.innerHTML = "";
+  pendingItems = [];
+  input.focus();
 });
 
 // Page load shows a blank chat either way (no history is restored visually),

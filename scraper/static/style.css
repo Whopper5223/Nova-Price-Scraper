@@ -67,6 +67,16 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+.topbar { position: relative; }
+
+.topbar #startOver {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-4);
+  padding: var(--space-1) var(--space-3);
+  font-size: 0.8rem;
+}
+
 .brand { display: flex; align-items: center; gap: var(--space-2); }
 
 .brand-mark {
