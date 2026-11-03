@@ -155,7 +155,7 @@ function renderStoreTotals(storeTotals, budget) {
 
   const budgetHtml = budget != null && oneStop
     ? (oneStop.total <= budget
-        ? `<p class="missing">Within your $${budget.toFixed(2)} budget (${(budget - oneStop.total).toFixed(2)} to spare).</p>`
+        ? `<p class="missing">Within your $${budget.toFixed(2)} budget ($${(budget - oneStop.total).toFixed(2)} to spare).</p>`
         : `<p class="missing">Over your $${budget.toFixed(2)} budget by $${(oneStop.total - budget).toFixed(2)} at the cheapest one-stop store.</p>`)
     : "";
 

@@ -1,0 +1,28 @@
+# lora_config.yaml — training config skeleton for the Nova chat-assistant LoRA adapter.
+#
+# Skeleton only, same spirit as Modelfile: names the pieces, nothing runnable yet.
+#   - No training data exists (data_path below is a placeholder) — waiting on
+#     real sample Q&A pairs from the professor.
+#   - Training framework not chosen yet (e.g. Unsloth vs. axolotl vs. raw peft)
+#     — depends on what's actually installable on the server, not guessed here.
+#   - Nothing in this file has been run.
+
+base_model: qwen3.8:27b          # matches FROM in scraper/Modelfile
+output_dir: ./nova-chat-adapter  # matches the commented ADAPTER line in scraper/Modelfile
+
+# LoRA hyperparameters — standard starting defaults, not tuned to anything yet.
+# These control how big/expressive the "patch" on top of the base model is.
+lora:
+  r: 16                                  # rank — higher = more capacity, more compute/memory
+  alpha: 32
+  dropout: 0.05
+  target_modules: ["q_proj", "v_proj"]   # placeholder — real modules depend on qwen3.8's architecture
+
+# Training data — DOES NOT EXIST YET.
+data_path: null    # e.g. ./data/chat_examples.jsonl once the professor provides examples
+data_format: null  # e.g. {"messages": [{"role": "user", "content": ...}, {"role": "assistant", "content": ...}]}
+
+# Training run settings — placeholders, not chosen/tuned.
+epochs: null
+learning_rate: null
+batch_size: null

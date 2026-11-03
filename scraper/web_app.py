@@ -43,6 +43,7 @@ from scraper.chat_assistant import (
     _extract_list,
     _price_from_saved,
     _price_live,
+    _states_an_amount,
     _store_basket_totals,
     _summarize,
     judge_model_warning,
@@ -132,6 +133,11 @@ def chat():
     sess["history"].append({"role": "assistant", "content": reply})
 
     extracted = _extract_list(sess["history"])
+    # The extractor reads the user's words only, so a bare follow-up after pricing
+    # ("I have 20 bucks") often yields no items even though the chat remembers the
+    # meal. A stated amount with no new items means "this same list, with a budget".
+    if not extracted["items"] and sess.get("last_items") and _states_an_amount(message):
+        extracted = {**extracted, "items": list(sess["last_items"]), "ready": True, "missing": ""}
     sess["budget"] = extracted["budget"]
     return jsonify({
         "reply": reply,
@@ -193,6 +199,8 @@ def price():
     summary = _summarize(f"Price check for: {', '.join(items)}", findings, missing, items, budget)
     store_totals = _store_basket_totals(findings, items)
 
+    sess["last_items"] = items
+
     # The conversation is kept: the chat on screen still shows it, so a follow-up
     # ("I have 20 bucks", "swap the chicken for fish") has to find it here too. The
     # user starts a fresh list with the Start over button (POST /api/reset).
@@ -211,6 +219,7 @@ def reset():
     sess = _get_session()
     sess["history"].clear()
     sess["budget"] = None
+    sess.pop("last_items", None)
     return jsonify({"ok": True})
 
 

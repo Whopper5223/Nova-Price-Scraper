@@ -638,7 +638,7 @@ def _summarize(user_request: str, findings: dict, missing: list[str], all_items:
         "store_totals": _store_basket_totals(findings, all_items),
     }
     try:
-        return ollama_client.chat(
+        reply = ollama_client.chat(
             [{"role": "user", "content": json.dumps(payload, indent=2)}],
             system=SUMMARY_SYSTEM_PROMPT,
             temperature=0.1,
@@ -646,6 +646,11 @@ def _summarize(user_request: str, findings: dict, missing: list[str], all_items:
     except OllamaError as e:
         print(f"[nova] Could not reach Ollama for the summary: {e}")
         return _plain_summary(findings, missing, all_items, budget)
+    if not reply.strip():
+        # Seen live: the model answered with nothing, and the page showed no summary.
+        print("[nova] Summary model returned nothing; using the plain summary.")
+        return _plain_summary(findings, missing, all_items, budget)
+    return reply
 
 
 def _snap_tag(eligible: bool | None) -> str:

@@ -257,5 +257,76 @@ class TestConversationSurvivesPricing(unittest.TestCase):
         self.assertIsNone(web_app.SESSIONS["keep-sid"]["budget"])
 
 
+class TestAmountOnlyFollowUpReusesTheLastPricedList(unittest.TestCase):
+    """After pricing, "I have 20 bucks" should offer the same list again with the budget.
+    The list extractor only sees the user's words, so it often finds no items in a bare
+    follow-up (caught live) and the confirm panel never came back."""
+
+    def setUp(self):
+        web_app.app.config["TESTING"] = True
+        self.client = web_app.app.test_client()
+        with self.client.session_transaction() as sess:
+            sess["sid"] = "carry-sid"
+        web_app.SESSIONS["carry-sid"] = {
+            "history": [{"role": "user", "content": "meat for dinner"}],
+            "budget": None,
+            "last_items": ["salmon fillet", "broccoli"],
+        }
+
+    def tearDown(self):
+        web_app.SESSIONS.pop("carry-sid", None)
+
+    def _chat(self, message, extracted):
+        with patch("scraper.web_app.ollama_client.chat", return_value="Got it."), \
+             patch("scraper.web_app._extract_list", return_value=extracted):
+            return self.client.post("/api/chat", json={"message": message}).get_json()
+
+    def test_a_stated_amount_with_no_items_brings_back_the_priced_list(self):
+        data = self._chat("I have 20 bucks", {"ready": False, "items": [], "missing": "nothing named", "budget": 20.0})
+
+        self.assertTrue(data["ready"])
+        self.assertEqual(data["items"], ["salmon fillet", "broccoli"])
+        self.assertEqual(data["missing"], "")
+        self.assertEqual(data["budget"], 20.0)
+
+    def test_a_message_without_an_amount_does_not_resurrect_the_old_list(self):
+        data = self._chat("what about dessert?", {"ready": False, "items": [], "missing": "x", "budget": None})
+
+        self.assertFalse(data["ready"])
+        self.assertEqual(data["items"], [])
+
+    def test_items_the_extractor_did_find_are_left_alone(self):
+        data = self._chat("I have 20 bucks and want tacos",
+                          {"ready": True, "items": ["tortillas"], "missing": "", "budget": 20.0})
+
+        self.assertEqual(data["items"], ["tortillas"])
+
+    def test_nothing_is_carried_when_no_list_was_priced_yet(self):
+        web_app.SESSIONS["carry-sid"].pop("last_items")
+
+        data = self._chat("I have 20 bucks", {"ready": False, "items": [], "missing": "x", "budget": 20.0})
+
+        self.assertEqual(data["items"], [])
+
+    @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
+    @patch("scraper.chat_assistant.ollama_client.chat")
+    def test_pricing_remembers_the_list_and_start_over_forgets_it(self, mock_chat, mock_pick):
+        mock_chat.return_value = "stub"
+        mock_pick.return_value = [0]
+        tmp = tempfile.TemporaryDirectory()
+        path = Path(tmp.name) / "prices.json"
+        path.write_text(json.dumps(_FIXTURE))
+        price_lookup.set_prices_path(path)
+        try:
+            self.client.post("/api/price", json={"items": ["milk"]})
+            self.assertEqual(web_app.SESSIONS["carry-sid"]["last_items"], ["milk"])
+
+            self.client.post("/api/reset")
+            self.assertNotIn("last_items", web_app.SESSIONS["carry-sid"])
+        finally:
+            price_lookup.set_prices_path(None)
+            tmp.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -212,5 +212,16 @@ class TestResultsAndStartOver(unittest.TestCase):
         self.assertIn("confirmBox.hidden = true", handler)
 
 
+@unittest.skipUnless(shutil.which("node"), "node is not installed")
+class TestBudgetLine(unittest.TestCase):
+    def test_the_amount_to_spare_has_a_dollar_sign(self):
+        store = {"store_name": "Stop & Shop", "total": 10.60, "covers_all_items": True,
+                 "items_covered": 3, "items_total": 3, "missing_items": [], "sticker_priced_items": []}
+
+        html = _call("renderStoreTotals", [store], 20.0)
+
+        self.assertIn("$9.40 to spare", html)
+
+
 if __name__ == "__main__":
     unittest.main()

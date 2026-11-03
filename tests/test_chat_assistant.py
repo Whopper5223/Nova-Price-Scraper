@@ -186,6 +186,24 @@ class TestSummaryDescribesTheEstimatedPrices(unittest.TestCase):
         self.assertIn("sticker_priced_items", SUMMARY_SYSTEM_PROMPT)
 
 
+class TestBlankSummaryFallsBackToThePlainOne(unittest.TestCase):
+    """Caught live: with a budget set, the summary model returned an empty string and
+    the results page showed no summary at all."""
+
+    @patch("scraper.chat_assistant.ollama_client.chat")
+    def test_an_empty_model_reply_is_replaced_by_the_plain_summary(self, mock_chat):
+        from scraper.chat_assistant import _summarize
+        findings = {"milk": [{"store_name": "ALDI", "name": "Whole Milk", "price": 1.59,
+                              "estimated_real_price": 1.59}]}
+        for blank in ("", "   \n"):
+            mock_chat.return_value = blank
+
+            text = _summarize("Price check for: milk", findings, [], ["milk"], 20.0)
+
+            self.assertIn("$1.59", text)
+            self.assertIn("ALDI", text)
+
+
 class TestSummaryPayloadStaysSmall(unittest.TestCase):
     """The summary prompt only talks about each item's cheapest row, but the payload
     carried every store's row. With a row per store that is ~4x the prompt tokens on
