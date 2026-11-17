@@ -184,6 +184,11 @@ Rules:
 - Mention the store name and the specific product name behind each price. Each item in
   "priced_items" lists one row per store, cheapest first; unless a comparison matters,
   talk about the first (cheapest) row only.
+- Each row has "price_source": "database" means the price is an estimated in-store price
+  from our database of real prices; "instacart" means it is the Instacart price as
+  listed, with no in-store estimate. Always say which source a price comes from, using
+  the words "our database of real prices" or "Instacart price"; never call an
+  Instacart price an in-store price.
 - Each row has "price" (what Instacart lists) and "estimated_real_price" (the estimated
   in-store price, null when there is no estimate for that store). When you quote a
   product's price use estimated_real_price if it is not null and call it an estimated
@@ -668,7 +673,8 @@ def _plain_summary(findings: dict, missing: list[str], all_items: list[str],
     for item, rows in findings.items():
         best = rows[0]
         tag = _snap_tag(best.get("snap_eligible"))
-        basis = "est. in-store" if best.get("estimated_real_price") is not None else "Instacart price"
+        basis = ("est. in-store, our database of real prices"
+                 if best.get("estimated_real_price") is not None else "Instacart price")
         lines.append(
             f"  {item:<24} ${price_lookup.effective_price(best):.2f} ({basis})  at {best['store_name']}  ({best['name']}){tag}"
         )

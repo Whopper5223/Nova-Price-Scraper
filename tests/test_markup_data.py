@@ -365,5 +365,18 @@ class TestFoodsNamed(unittest.TestCase):
         self.assertEqual(markup_data.foods_named(""), set())
 
 
+class TestGroceryDepartments(unittest.TestCase):
+    """The departments the Instacart-price fallback may keep rows from: exactly the
+    ones the markup code already knows, never household, pets, baby or unknown ones."""
+
+    def test_includes_every_department_classify_knows(self):
+        for department in ("produce", "frozen", "dairy", "baked-goods", "breakfast-foods", "meat-and-seafood"):
+            self.assertIn(department, markup_data.GROCERY_DEPARTMENTS)
+
+    def test_excludes_non_grocery_and_unknown_departments(self):
+        for department in ("household", "pets", "baby", "party-gifts", "personal-care", "mystery-aisle"):
+            self.assertNotIn(department, markup_data.GROCERY_DEPARTMENTS)
+
+
 if __name__ == "__main__":
     unittest.main()

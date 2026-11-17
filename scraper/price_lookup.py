@@ -76,14 +76,16 @@ def query_prices(term: str, limit: int = 20, path: Path | None = None) -> list[d
     agree on what counts as a hit. Non-grocery departments (see
     _NON_GROCERY_DEPARTMENTS) are excluded before matching.
 
-    Results are further restricted to markup_data.CATEGORIES -- the categories
-    some store has a real in-store markup number for. A product in no such
-    category is dropped rather than shown with an un-adjusted Instacart price.
-    A product whose own store has no number for its category is kept, with
-    estimated_real_price None -- no estimate is invented for the gap.
+    A product in a markup category is priced with that store's real markup
+    number. A product whose own store has no number for its category is kept,
+    with estimated_real_price None -- no estimate is invented for the gap. A
+    grocery product that matches no category at all (eggs, pork chops) is kept
+    the same way, with category None. Only products from non-grocery or unknown
+    departments (markup_data.GROCERY_DEPARTMENTS) are dropped.
 
     Each row: {store_name, store_url, name, price, unit, department,
-    category, estimated_real_price}.
+    category, estimated_real_price, price_source}. price_source says where the
+    price comes from -- see price_source().
     """
     data = load_latest(path)
     if not data:
@@ -101,8 +103,9 @@ def query_prices(term: str, limit: int = 20, path: Path | None = None) -> list[d
             if price is None or not product_embeddings.matches_query(name, term):
                 continue
             category = markup_data.classify(name, department)
-            if category is None:
+            if category is None and (department or "").lower() not in markup_data.GROCERY_DEPARTMENTS:
                 continue
+            estimate = markup_data.estimate_real_price(price, store_name, category)
             matches.append({
                 "store_name": store_name,
                 "store_url": store.get("url"),
@@ -111,7 +114,8 @@ def query_prices(term: str, limit: int = 20, path: Path | None = None) -> list[d
                 "unit": product.get("unit"),
                 "department": department,
                 "category": category,
-                "estimated_real_price": markup_data.estimate_real_price(price, store_name, category),
+                "estimated_real_price": estimate,
+                "price_source": "instacart" if estimate is None else "database",
                 "snap_eligible": is_snap_eligible(name, department),
             })
 
@@ -296,6 +300,13 @@ def closest_per_store(term: str, chosen: dict, rows: list[dict]) -> list[dict]:
                 key=lambda r: (tier(r), is_variant(r), -shared_words(r), effective_price(r)),
             ))
     return sorted(picked, key=effective_price)
+
+
+def price_source(row: dict) -> str:
+    """Where a row's price comes from: "database" when the store has a real markup
+    number for its category (an estimated in-store price), else "instacart" -- the
+    price as listed on Instacart, unadjusted."""
+    return "instacart" if row.get("estimated_real_price") is None else "database"
 
 
 def effective_price(row: dict) -> float:

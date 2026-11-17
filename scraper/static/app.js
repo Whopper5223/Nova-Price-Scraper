@@ -173,7 +173,7 @@ function formatPrice(row) {
   if (row.estimated_real_price != null) {
     return {
       main: `~$${row.estimated_real_price.toFixed(2)}`,
-      note: `est. in-store · Instacart $${row.price.toFixed(2)}`,
+      note: `est. in-store · our database of real prices · Instacart $${row.price.toFixed(2)}`,
     };
   }
   return { main: `$${row.price.toFixed(2)}`, note: "Instacart price" };

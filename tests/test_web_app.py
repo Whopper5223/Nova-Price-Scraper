@@ -328,5 +328,42 @@ class TestAmountOnlyFollowUpReusesTheLastPricedList(unittest.TestCase):
             tmp.cleanup()
 
 
+_SOURCE_FIXTURE = {
+    "scraped_at": datetime.now(timezone.utc).isoformat(),
+    "location": "Test City",
+    "stores": [{"name": "Shaw's", "url": "https://example.com", "product_count": 2, "products": [
+        {"name": "Whole Milk", "price": 3.00, "unit": None, "department": "dairy"},
+        {"name": "Large Eggs", "price": 4.00, "unit": None, "department": "dairy"},
+    ]}],
+}
+
+
+class TestApiPriceReportsTheSourceOfEachPrice(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        path = Path(self._tmpdir.name) / "prices.json"
+        path.write_text(json.dumps(_SOURCE_FIXTURE))
+        price_lookup.set_prices_path(path)
+        web_app.app.config["TESTING"] = True
+        self.client = web_app.app.test_client()
+
+    def tearDown(self):
+        price_lookup.set_prices_path(None)
+        self._tmpdir.cleanup()
+
+    @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
+    @patch("scraper.chat_assistant.ollama_client.chat")
+    def test_eggs_are_priced_not_missing_and_every_row_has_a_source(self, mock_chat, mock_pick):
+        mock_chat.return_value = "stub"
+        mock_pick.return_value = [0, 0]
+
+        data = self.client.post("/api/price", json={"items": ["milk", "eggs"]}).get_json()
+
+        self.assertEqual(data["missing"], [])
+        self.assertEqual(data["findings"]["milk"][0]["price_source"], "database")
+        self.assertEqual(data["findings"]["eggs"][0]["price_source"], "instacart")
+        self.assertIsNone(data["findings"]["eggs"][0]["estimated_real_price"])
+
+
 if __name__ == "__main__":
     unittest.main()

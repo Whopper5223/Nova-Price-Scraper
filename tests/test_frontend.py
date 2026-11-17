@@ -114,6 +114,22 @@ class TestRenderItemRow(unittest.TestCase):
         self.assertIn("~$2.37", html)
         self.assertIn("Instacart $3.16", html)
 
+    def test_a_database_price_names_its_source(self):
+        html = self._row("milk", [_STOP_AND_SHOP_MILK])
+
+        self.assertIn("our database of real prices", html)
+
+    def test_the_also_at_lines_name_their_source_too(self):
+        html = self._row("milk", [_ALDI_MILK, _STOP_AND_SHOP_MILK])
+
+        also = html[html.index("Also at"):]
+        self.assertIn("our database of real prices", also)
+
+    def test_an_instacart_fallback_row_never_says_database(self):
+        html = self._row("yogurt", [_MARKET_BASKET_YOGURT])
+
+        self.assertNotIn("database", html)
+
     def test_a_store_with_no_estimate_shows_its_instacart_price_labelled_as_such(self):
         html = self._row("yogurt", [_MARKET_BASKET_YOGURT])
 

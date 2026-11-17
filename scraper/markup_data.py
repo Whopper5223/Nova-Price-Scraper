@@ -166,6 +166,12 @@ def classify(name: str, department: str | None) -> str | None:
 # Departments classify() splits by keyword rather than taking whole.
 _KEYWORD_SPLIT_DEPARTMENTS = ("dairy", "baked-goods", "breakfast-foods", "meat-and-seafood")
 
+# Every department the markup code knows. A product in one of these that matches no
+# markup category (eggs, pork chops, ...) is still food; it is kept, unadjusted, as an
+# Instacart price. A product in any other department (household, pets, baby, unknown)
+# is not, and stays dropped.
+GROCERY_DEPARTMENTS = frozenset(_DEPARTMENT_CATEGORY) | frozenset(_KEYWORD_SPLIT_DEPARTMENTS)
+
 
 def categories_for_term(term: str) -> set[str]:
     """

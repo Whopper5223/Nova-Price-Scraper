@@ -204,6 +204,21 @@ class TestBlankSummaryFallsBackToThePlainOne(unittest.TestCase):
             self.assertIn("ALDI", text)
 
 
+class TestSummaryNamesTheSourceOfEachPrice(unittest.TestCase):
+    def test_the_summary_model_is_told_to_name_the_source(self):
+        self.assertIn("price_source", SUMMARY_SYSTEM_PROMPT)
+        self.assertIn("our database of real prices", SUMMARY_SYSTEM_PROMPT)
+        self.assertIn("Instacart price", SUMMARY_SYSTEM_PROMPT)
+
+    def test_plain_fallback_names_the_database_as_the_source(self):
+        findings = {"milk": [{"store_name": "Shaw's", "name": "Whole Milk", "price": 3.16,
+                              "estimated_real_price": 2.37, "price_source": "database"}]}
+
+        text = _plain_summary(findings, [], ["milk"])
+
+        self.assertIn("our database of real prices", text)
+
+
 class TestSummaryPayloadStaysSmall(unittest.TestCase):
     """The summary prompt only talks about each item's cheapest row, but the payload
     carried every store's row. With a row per store that is ~4x the prompt tokens on

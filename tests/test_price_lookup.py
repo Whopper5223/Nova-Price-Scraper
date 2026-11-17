@@ -515,5 +515,103 @@ class TestClosestPerStore(unittest.TestCase):
         self.assertEqual([r["store_name"] for r in picked], ["Stop & Shop", "ALDI"])
 
 
+_FALLBACK_FIXTURE = {
+    "scraped_at": "2026-01-01T00:00:00+00:00",
+    "location": "Test City",
+    "stores": [
+        {"name": "Shaw's", "url": "https://example.com", "product_count": 5, "products": [
+            {"name": "Whole Milk", "price": 3.00, "unit": None, "department": "dairy"},
+            {"name": "Large Eggs", "price": 4.00, "unit": None, "department": "dairy"},
+            {"name": "Boneless Pork Chops", "price": 7.00, "unit": None, "department": "meat-and-seafood"},
+            {"name": "Egg Soap Bar", "price": 1.00, "unit": None, "department": "household"},
+            {"name": "Egg Mystery Box", "price": 2.00, "unit": None, "department": "mystery-aisle"},
+        ]},
+        {"name": "Market Basket", "url": "https://example.com", "product_count": 1, "products": [
+            {"name": "Whole Milk", "price": 2.50, "unit": None, "department": "dairy"},
+        ]},
+    ],
+}
+
+
+class TestInstacartPriceFallbackRows(unittest.TestCase):
+    """Foods that sit in a grocery department but match no markup category (eggs, pork
+    chops, ...) used to be dropped, so recipes using them couldn't be priced. They are
+    kept now, unadjusted, and every row says where its price comes from."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.path = Path(self._tmpdir.name) / "prices.json"
+        self.path.write_text(json.dumps(_FALLBACK_FIXTURE))
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def _rows(self, term):
+        return price_lookup.query_prices(term, limit=0, path=self.path)
+
+    def test_a_food_with_no_markup_category_is_kept_as_an_instacart_price(self):
+        rows = self._rows("eggs")
+
+        self.assertEqual([r["name"] for r in rows], ["Large Eggs"])
+        self.assertIsNone(rows[0]["category"])
+        self.assertIsNone(rows[0]["estimated_real_price"])
+        self.assertEqual(rows[0]["price_source"], "instacart")
+        self.assertEqual(rows[0]["price"], 4.00)
+
+    def test_meat_the_markup_sheet_has_no_number_for_is_kept_too(self):
+        rows = self._rows("pork chops")
+
+        self.assertEqual([r["name"] for r in rows], ["Boneless Pork Chops"])
+        self.assertEqual(rows[0]["price_source"], "instacart")
+
+    def test_a_row_with_a_real_markup_estimate_is_a_database_price(self):
+        shaws = next(r for r in self._rows("milk") if r["store_name"] == "Shaw's")
+
+        self.assertEqual(shaws["price_source"], "database")
+        self.assertIsNotNone(shaws["estimated_real_price"])
+
+    def test_the_source_is_per_store_one_item_can_mix_both(self):
+        # Market Basket has no Milk number, so ITS row is an Instacart price even
+        # though Shaw's row for the same item is a database price.
+        by_store = {r["store_name"]: r["price_source"] for r in self._rows("milk")}
+
+        self.assertEqual(by_store, {"Shaw's": "database", "Market Basket": "instacart"})
+
+    def test_non_grocery_and_unknown_departments_are_still_dropped(self):
+        names = [r["name"] for r in self._rows("egg")]
+
+        self.assertNotIn("Egg Soap Bar", names)
+        self.assertNotIn("Egg Mystery Box", names)
+
+    def test_price_source_helper_reads_the_estimate(self):
+        self.assertEqual(price_lookup.price_source({"price": 3.0, "estimated_real_price": 2.2}), "database")
+        self.assertEqual(price_lookup.price_source({"price": 3.0, "estimated_real_price": None}), "instacart")
+        self.assertEqual(price_lookup.price_source({"price": 3.0}), "instacart")
+
+
+class TestRankingWithUncategorizedRows(unittest.TestCase):
+    def test_plain_eggs_outrank_hard_boiled_eggs_when_both_have_no_category(self):
+        rows = [
+            _row("Almark Foods Eggs, Cage Free, Hard-Boiled", 1.29, None),
+            _row("Lucerne Eggs, Cage Free, Large", 3.99, None),
+        ]
+
+        ranked = price_lookup.rank_candidates("eggs", rows)
+
+        self.assertEqual(ranked[0]["name"], "Lucerne Eggs, Cage Free, Large")
+
+    def test_closest_per_store_handles_a_chosen_product_with_no_category(self):
+        rows = [
+            _row("Lucerne Eggs, Large", 3.99, None, store="Shaw's"),
+            _row("Store Brand Large Eggs", 4.49, None, store="Stop & Shop"),
+            _row("Egg Noodles", 1.99, "Pasta & Dry Goods", store="Stop & Shop"),
+        ]
+
+        picked = price_lookup.closest_per_store("eggs", rows[0], rows)
+
+        self.assertEqual(sorted(r["store_name"] for r in picked), ["Shaw's", "Stop & Shop"])
+        self.assertEqual(next(r for r in picked if r["store_name"] == "Stop & Shop")["name"], "Store Brand Large Eggs")
+
+
 if __name__ == "__main__":
     unittest.main()
