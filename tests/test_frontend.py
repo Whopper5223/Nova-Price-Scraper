@@ -239,5 +239,51 @@ class TestBudgetLine(unittest.TestCase):
         self.assertIn("$9.40 to spare", html)
 
 
+_SUBSTITUTE_ROW = {
+    "store_name": "Market Basket", "name": "Canola Oil", "price": 3.00, "estimated_real_price": 2.64,
+    "price_source": "substitute", "substitute_for": "grapeseed oil",
+}
+
+
+@unittest.skipUnless(shutil.which("node"), "node is not installed")
+class TestSubstituteLabels(unittest.TestCase):
+    def _row(self, rows):
+        return _call("renderItemRow", "grapeseed oil", rows, helpers=("formatPrice",))
+
+    def test_a_substitute_says_what_it_is_a_substitute_for(self):
+        html = self._row([_SUBSTITUTE_ROW])
+
+        self.assertIn("Substitute for grapeseed oil", html)
+
+    def test_the_underlying_price_basis_is_still_shown(self):
+        html = self._row([_SUBSTITUTE_ROW])
+
+        self.assertIn("~$2.64", html)
+        self.assertIn("our database of real prices", html)
+
+    def test_a_substitute_priced_at_instacart_says_so(self):
+        row = {**_SUBSTITUTE_ROW, "estimated_real_price": None, "store_name": "Stop & Shop"}
+
+        html = self._row([row])
+
+        self.assertIn("Substitute for grapeseed oil", html)
+        self.assertIn("Instacart price", html)
+
+    def test_the_also_at_lines_carry_the_label_too(self):
+        other = {**_SUBSTITUTE_ROW, "estimated_real_price": None, "store_name": "Stop & Shop"}
+
+        html = self._row([_SUBSTITUTE_ROW, other])
+
+        also = html[html.index("Also at"):]
+        self.assertIn("Substitute for grapeseed oil", also)
+
+    def test_the_ingredient_name_in_the_label_is_escaped(self):
+        row = {**_SUBSTITUTE_ROW, "substitute_for": "<img src=x onerror=y>"}
+
+        html = self._row([row])
+
+        self.assertNotIn("<img", html)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -219,6 +219,158 @@ class TestSummaryNamesTheSourceOfEachPrice(unittest.TestCase):
         self.assertIn("our database of real prices", text)
 
 
+def _store(name, products):
+    return {"name": name, "url": "https://example.com", "product_count": len(products), "products": products}
+
+
+# Market Basket has a real Oils & Spices markup number, Stop & Shop does not.
+_SUBSTITUTION_FIXTURE = {
+    "scraped_at": "2026-01-01T00:00:00+00:00",
+    "location": "Test City",
+    "stores": [
+        _store("Market Basket", [
+            {"name": "Canola Oil", "price": 3.00, "unit": None, "department": "oils-vinegars-spices"},
+        ]),
+        _store("Stop & Shop", [
+            {"name": "Canola Oil", "price": 4.00, "unit": None, "department": "oils-vinegars-spices"},
+            {"name": "Large Eggs", "price": 4.00, "unit": None, "department": "dairy"},
+        ]),
+    ],
+}
+
+
+def _pick_first(_context, _items, batch, model=None):
+    return [0] * len(batch)
+
+
+class TestPriceFromSavedSubstitution(unittest.TestCase):
+    """An ingredient with no price in our database at ANY store may get an
+    interchangeable substitute (one oil for another). Every store then prices the
+    same substitute, keyed under the ingredient the recipe asked for."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        fixture_path = Path(self._tmpdir.name) / "prices.json"
+        fixture_path.write_text(json.dumps(_SUBSTITUTION_FIXTURE))
+        price_lookup.set_prices_path(fixture_path)
+
+    def tearDown(self):
+        price_lookup.set_prices_path(None)
+        self._tmpdir.cleanup()
+
+    def _price(self, items, proposals):
+        with patch("scraper.chat_assistant.product_matcher.pick_best_matches", side_effect=_pick_first), \
+             patch("scraper.chat_assistant.substitutions.propose_substitutes", return_value=proposals) as mock_sub:
+            findings, unresolved = _price_from_saved(items, max_age_hours=999999, context="pad thai")
+        return findings, unresolved, mock_sub
+
+    def test_an_ingredient_with_no_listing_gets_the_substitute_at_every_store(self):
+        findings, unresolved, _ = self._price(["grapeseed oil"], {"grapeseed oil": ["canola oil"]})
+
+        self.assertEqual(unresolved, [])
+        rows = findings["grapeseed oil"]
+        self.assertEqual(sorted(r["store_name"] for r in rows), ["Market Basket", "Stop & Shop"])
+        for row in rows:
+            self.assertEqual(row["price_source"], "substitute")
+            self.assertEqual(row["substitute_for"], "grapeseed oil")
+            self.assertEqual(row["substitute_term"], "canola oil")
+            self.assertEqual(row["name"], "Canola Oil")
+
+    def test_a_substitute_row_keeps_its_own_price_basis(self):
+        findings, _, _ = self._price(["grapeseed oil"], {"grapeseed oil": ["canola oil"]})
+
+        by_store = {r["store_name"]: r["estimated_real_price"] for r in findings["grapeseed oil"]}
+        self.assertIsNotNone(by_store["Market Basket"])
+        self.assertIsNone(by_store["Stop & Shop"])
+
+    def test_no_proposal_leaves_an_unlisted_ingredient_unresolved(self):
+        findings, unresolved, _ = self._price(["saffron"], {})
+
+        self.assertEqual(findings, {})
+        self.assertEqual(unresolved, ["saffron"])
+
+    def test_an_instacart_only_food_with_no_stand_in_keeps_its_instacart_price(self):
+        findings, unresolved, _ = self._price(["eggs"], {})
+
+        self.assertEqual(unresolved, [])
+        self.assertEqual(findings["eggs"][0]["price_source"], "instacart")
+        self.assertEqual(findings["eggs"][0]["name"], "Large Eggs")
+
+    def test_a_substitute_replaces_an_instacart_only_food_when_the_model_proposes_one(self):
+        # The confirmed order is database -> substitute -> Instacart price, so a
+        # proposal for an Instacart-only food is honoured; the prompt is what keeps
+        # the model from proposing one for eggs.
+        findings, _, _ = self._price(["eggs"], {"eggs": ["canola oil"]})
+
+        self.assertEqual(findings["eggs"][0]["price_source"], "substitute")
+
+    def test_a_substitute_with_no_database_price_at_any_store_is_rejected(self):
+        findings, unresolved, _ = self._price(["grapeseed oil"], {"grapeseed oil": ["large eggs"]})
+
+        self.assertEqual(findings, {})
+        self.assertEqual(unresolved, ["grapeseed oil"])
+
+    def test_the_second_option_is_tried_when_the_first_has_no_database_price(self):
+        findings, _, _ = self._price(["grapeseed oil"], {"grapeseed oil": ["large eggs", "canola oil"]})
+
+        self.assertEqual(findings["grapeseed oil"][0]["substitute_term"], "canola oil")
+
+    def test_no_model_call_when_every_ingredient_has_a_database_price(self):
+        findings, _, mock_sub = self._price(["canola oil"], {})
+
+        mock_sub.assert_not_called()
+        self.assertEqual(findings["canola oil"][0]["price_source"], "database")
+
+    def test_one_batched_call_covers_every_ingredient_that_needs_a_substitute(self):
+        _findings, _unresolved, mock_sub = self._price(["grapeseed oil", "eggs", "canola oil"], {})
+
+        self.assertEqual(mock_sub.call_count, 1)
+        asked = mock_sub.call_args[0][0]
+        self.assertEqual(sorted(asked), ["eggs", "grapeseed oil"])
+
+
+class TestStoreTotalsCountSubstitutes(unittest.TestCase):
+    def test_substituted_items_are_listed_per_store(self):
+        findings = {
+            "grapeseed oil": [
+                {"store_name": "Market Basket", "price": 3.00, "estimated_real_price": 2.64,
+                 "price_source": "substitute", "substitute_for": "grapeseed oil"},
+                {"store_name": "Stop & Shop", "price": 4.00, "estimated_real_price": None,
+                 "price_source": "substitute", "substitute_for": "grapeseed oil"},
+            ],
+            "milk": [{"store_name": "Market Basket", "price": 2.0, "estimated_real_price": 1.8,
+                      "price_source": "database"}],
+        }
+
+        totals = {t["store_name"]: t for t in _store_basket_totals(findings, ["grapeseed oil", "milk"])}
+
+        self.assertEqual(totals["Market Basket"]["substituted_items"], ["grapeseed oil"])
+        self.assertEqual(totals["Stop & Shop"]["substituted_items"], ["grapeseed oil"])
+        # A substitute priced at its Instacart price is still disclosed as that, too.
+        self.assertEqual(totals["Stop & Shop"]["sticker_priced_items"], ["grapeseed oil"])
+        self.assertEqual(totals["Market Basket"]["sticker_priced_items"], [])
+
+    def test_no_substitutes_means_an_empty_list(self):
+        findings = {"milk": [{"store_name": "ALDI", "price": 2.0, "estimated_real_price": 2.0}]}
+
+        self.assertEqual(_store_basket_totals(findings, ["milk"])[0]["substituted_items"], [])
+
+
+class TestSummaryAndFallbackSayWhenItIsASubstitute(unittest.TestCase):
+    def test_the_summary_model_is_told_to_say_so(self):
+        self.assertIn("substitute", SUMMARY_SYSTEM_PROMPT)
+        self.assertIn("substitute_for", SUMMARY_SYSTEM_PROMPT)
+
+    def test_the_plain_fallback_names_what_it_is_a_substitute_for(self):
+        findings = {"grapeseed oil": [{"store_name": "Market Basket", "name": "Canola Oil", "price": 3.0,
+                                       "estimated_real_price": 2.64, "price_source": "substitute",
+                                       "substitute_for": "grapeseed oil"}]}
+
+        text = _plain_summary(findings, [], ["grapeseed oil"])
+
+        self.assertIn("Substitute for grapeseed oil", text)
+
+
 class TestSummaryPayloadStaysSmall(unittest.TestCase):
     """The summary prompt only talks about each item's cheapest row, but the payload
     carried every store's row. With a row per store that is ~4x the prompt tokens on

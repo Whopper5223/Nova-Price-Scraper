@@ -1,6 +1,7 @@
 # Spec: Recipe pricing fallbacks (substitute, Instacart price) with a visible source
 
-Status: DRAFT for review (Phase 1, Specify). Nothing below is built yet.
+Status: Slice 1 (source labels + Instacart-price fallback) and Slice 2 (substitution) built 2026-11-16;
+live verification on the server pending.
 Intent: confirmed in conversation, 2026-11-16 (interview). Extends the chat
 pricing path in `scraper/chat_assistant.py::_price_from_saved` and
 `docs/specs/rag-product-matching-spec.md`.

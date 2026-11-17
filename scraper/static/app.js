@@ -170,13 +170,17 @@ function renderStoreTotals(storeTotals, budget) {
 // The price to lead with: the estimated in-store price when the store has one (it is
 // what the store totals are built from), the Instacart price, labelled as such, when not.
 function formatPrice(row) {
-  if (row.estimated_real_price != null) {
-    return {
-      main: `~$${row.estimated_real_price.toFixed(2)}`,
-      note: `est. in-store · our database of real prices · Instacart $${row.price.toFixed(2)}`,
-    };
+  const price = row.estimated_real_price != null
+    ? {
+        main: `~$${row.estimated_real_price.toFixed(2)}`,
+        note: `est. in-store · our database of real prices · Instacart $${row.price.toFixed(2)}`,
+      }
+    : { main: `$${row.price.toFixed(2)}`, note: "Instacart price" };
+  // A stand-in for an ingredient we had no price for says so, then says what its price is.
+  if (row.price_source === "substitute") {
+    price.note = `Substitute for ${row.substitute_for} · ${price.note}`;
   }
-  return { main: `$${row.price.toFixed(2)}`, note: "Instacart price" };
+  return price;
 }
 
 // rows is one entry per store, cheapest first: the first leads, the rest are "Also at".

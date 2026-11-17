@@ -38,7 +38,7 @@ if _env_file.exists():
             _k, _v = _line.split("=", 1)
             os.environ.setdefault(_k.strip(), _v.strip())
 
-from scraper import ollama_client, price_lookup, product_matcher
+from scraper import ollama_client, price_lookup, product_matcher, substitutions
 from scraper.ollama_client import OllamaError
 from scraper.snap_eligibility import is_snap_eligible
 
@@ -184,6 +184,10 @@ Rules:
 - Mention the store name and the specific product name behind each price. Each item in
   "priced_items" lists one row per store, cheapest first; unless a comparison matters,
   talk about the first (cheapest) row only.
+- A row whose "price_source" is "substitute" is a stand-in: "substitute_for" is the
+  ingredient the user actually asked for. Say plainly that it is a substitute for that
+  ingredient, and still say whether its price is from our database of real prices or an
+  Instacart price. Never present a substitute as if it were the original.
 - Each row has "price_source": "database" means the price is an estimated in-store price
   from our database of real prices; "instacart" means it is the Instacart price as
   listed, with no in-store estimate. Always say which source a price comes from, using
@@ -435,6 +439,37 @@ def _extract_list(history: list[dict]) -> dict:
 JUDGE_CANDIDATES_PER_ITEM = 8
 
 
+def _add_substitutes(items: list[str], findings: dict, unresolved: list[str], context: str) -> None:
+    """
+    For each ingredient with no price in our database at ANY store (no row is a
+    "database" price: unlisted, or only Instacart prices), ask the model for an
+    interchangeable item and, if one has a database price, price that instead. It is
+    decided per ingredient so every store prices the same substitute; the result is
+    keyed under the ingredient the recipe asked for, every row labelled "substitute".
+    One batched model call, and none at all when every ingredient already has a database
+    price. Mutates `findings` and `unresolved`.
+    """
+    needy = [i for i in items if not any(r.get("price_source") == "database" for r in findings.get(i, []))]
+    if not needy:
+        return
+    proposals = substitutions.propose_substitutes(needy, context or "a grocery shopping list", model=JUDGE_MODEL)
+    for item in needy:
+        for name in proposals.get(item, []):
+            rows = price_lookup.query_prices(name, limit=0)
+            # The model named the stand-in; a real database price is what makes it usable.
+            chosen = next((r for r in price_lookup.rank_candidates(name, rows)
+                           if r.get("price_source") == "database"), None)
+            if chosen is None:
+                continue
+            findings[item] = [
+                {**r, "price_source": "substitute", "substitute_for": item, "substitute_term": name}
+                for r in price_lookup.closest_per_store(name, chosen, rows)
+            ]
+            if item in unresolved:
+                unresolved.remove(item)
+            break
+
+
 def _rows_for_pick(item: str, chosen_name: str, rows: list[dict]) -> list[dict]:
     """One row per store for `item`: the judge's pick where a store carries it, and
     that store's closest equivalent where it doesn't."""
@@ -544,6 +579,8 @@ def _price_from_saved(items: list[str], max_age_hours: int, context: str = "") -
                 findings[item] = rows
                 unresolved.remove(item)
 
+    _add_substitutes(items, findings, unresolved, context)
+
     if findings:
         print(f"[nova] Found {len(findings)} item(s) in saved prices.")
     return findings, unresolved
@@ -601,12 +638,15 @@ def _store_basket_totals(findings: dict, all_items: list[str]) -> list[dict]:
     """
     store_prices: dict[str, dict[str, float]] = {}
     sticker_priced: dict[str, set[str]] = {}
+    substituted: dict[str, set[str]] = {}
     for item, rows in findings.items():
         for row in rows:
             store = row["store_name"]
             store_prices.setdefault(store, {})[item] = price_lookup.effective_price(row)
             if row.get("estimated_real_price") is None:
                 sticker_priced.setdefault(store, set()).add(item)
+            if row.get("price_source") == "substitute":
+                substituted.setdefault(store, set()).add(item)
 
     totals = []
     for store, prices in store_prices.items():
@@ -620,6 +660,8 @@ def _store_basket_totals(findings: dict, all_items: list[str]) -> list[dict]:
             # Totals are estimated in-store prices; these items had no estimate for
             # this store, so they're counted at their Instacart price.
             "sticker_priced_items": [i for i in covered if i in sticker_priced.get(store, ())],
+            # Items this store's price is for a substitute ingredient, not the one asked for.
+            "substituted_items": [i for i in covered if i in substituted.get(store, ())],
             "total": round(sum(prices[i] for i in covered), 2),
         })
     # Full coverage first, then the most items covered, then cheapest. Without the
@@ -675,6 +717,8 @@ def _plain_summary(findings: dict, missing: list[str], all_items: list[str],
         tag = _snap_tag(best.get("snap_eligible"))
         basis = ("est. in-store, our database of real prices"
                  if best.get("estimated_real_price") is not None else "Instacart price")
+        if best.get("price_source") == "substitute":
+            basis = f"Substitute for {best.get('substitute_for', item)}; {basis}"
         lines.append(
             f"  {item:<24} ${price_lookup.effective_price(best):.2f} ({basis})  at {best['store_name']}  ({best['name']}){tag}"
         )

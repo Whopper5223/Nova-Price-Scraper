@@ -21,3 +21,14 @@
   - Verify: tests/test_web_app.py
 - [x] T7 full suite + local commit (do not push without asking)
   - Verify: ./.venv/bin/python3 -m unittest discover -s tests
+
+# Tasks -- Slice 2 (substitution)
+
+- [x] T8 scraper/substitutions.py: one batched model call, validated, never raises
+  - Verify: tests/test_substitutions.py; probed on llama3.1 and qwen2.5:14b (eggs/bacon/saffron -> no substitute)
+- [x] T9 _price_from_saved: substitute only when no store has a database price; rows labelled "substitute"
+  with substitute_for / substitute_term; one batched call, none when every item has a database price
+  - Verify: tests/test_chat_assistant.py::TestPriceFromSavedSubstitution
+- [x] T10 store_totals.substituted_items; summary prompt + plain fallback say "substitute"
+- [x] T11 UI: "Substitute for <ingredient>" on lead and "Also at" rows (escaped)
+  - Verify: tests/test_frontend.py::TestSubstituteLabels, node --check
