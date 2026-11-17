@@ -454,8 +454,8 @@ def _add_substitutes(items: list[str], findings: dict, unresolved: list[str], co
     """
     Last step of the fallback order: database price, then the Instacart price, then --
     only for an ingredient we found nothing for at all -- a substitute. The model is
-    asked for interchangeable items (one oil for another); a proposal is used only if it
-    has a real database price at some store. Decided per ingredient so every store prices
+    asked for interchangeable items (one oil for another); the first proposal we have
+    any listing for is priced like a normal item. Decided per ingredient so every store prices
     the same substitute; the result stays keyed under the ingredient asked for, every row
     labelled "substitute". One batched call, and none when everything was found.
     Mutates `findings` and `unresolved`.
@@ -467,11 +467,11 @@ def _add_substitutes(items: list[str], findings: dict, unresolved: list[str], co
     for item in needy:
         for name in proposals.get(item, []):
             rows = price_lookup.query_prices(name, limit=0)
-            # The model named the stand-in; a real database price is what makes it usable.
-            chosen = next((r for r in price_lookup.rank_candidates(name, rows)
-                           if r.get("price_source") == "database"), None)
-            if chosen is None:
+            if not rows:
                 continue
+            # Priced like any item: the best-ranked product, at its database price where a
+            # store has one and its Instacart price where not.
+            chosen = price_lookup.rank_candidates(name, rows)[0]
             findings[item] = [
                 {**r, "price_source": "substitute", "substitute_for": item, "substitute_term": name}
                 for r in price_lookup.closest_per_store(name, chosen, rows)

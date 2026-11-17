@@ -305,14 +305,25 @@ class TestPriceFromSavedSubstitution(unittest.TestCase):
         self.assertEqual(findings["eggs"][0]["price_source"], "instacart")
         mock_sub.assert_not_called()
 
-    def test_a_substitute_with_no_database_price_at_any_store_is_rejected(self):
+    def test_a_substitute_with_only_instacart_prices_is_used_like_any_item(self):
+        # Pancetta -> "bacon": real bacon only has Instacart prices. A substitute goes
+        # through the same order as any item, so it is used, at its Instacart price.
         findings, unresolved, _ = self._price(["grapeseed oil"], {"grapeseed oil": ["large eggs"]})
 
-        self.assertEqual(findings, {})
-        self.assertEqual(unresolved, ["grapeseed oil"])
+        self.assertEqual(unresolved, [])
+        row = findings["grapeseed oil"][0]
+        self.assertEqual((row["name"], row["price_source"]), ("Large Eggs", "substitute"))
+        self.assertIsNone(row["estimated_real_price"])
 
-    def test_the_second_option_is_tried_when_the_first_has_no_database_price(self):
-        findings, _, _ = self._price(["grapeseed oil"], {"grapeseed oil": ["large eggs", "canola oil"]})
+    def test_the_best_ranked_product_wins_not_the_one_with_a_database_price(self):
+        # Ranking decides the product, exactly as for a normal item; a database price
+        # elsewhere in the list doesn't jump the queue.
+        findings, _, _ = self._price(["sunflower oil"], {"sunflower oil": ["canola oil"]})
+
+        self.assertEqual(findings["sunflower oil"][0]["name"], "Canola Oil")
+
+    def test_a_substitute_with_no_listing_at_all_is_skipped_for_the_next_option(self):
+        findings, _, _ = self._price(["grapeseed oil"], {"grapeseed oil": ["unobtainium", "canola oil"]})
 
         self.assertEqual(findings["grapeseed oil"][0]["substitute_term"], "canola oil")
 
