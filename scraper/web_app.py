@@ -47,6 +47,7 @@ from scraper.chat_assistant import (
     _store_basket_totals,
     _summarize,
     judge_model_warning,
+    set_judge_enabled,
     set_judge_model,
 )
 
@@ -249,6 +250,10 @@ def main() -> None:
                          help="Model that picks the right product for each item (default: "
                               "the built-in judge model). Pass the chat model's name to judge "
                               "with the same model.")
+    parser.add_argument("--judge", action="store_true",
+                         help="Let the judge model pick each item's product (off by default: on a slow, "
+                              "shared GPU it times out and only adds waiting; the best-ranked "
+                              "candidate is used instead).")
     parser.add_argument("--max-age-hours", type=int, default=price_lookup.DEFAULT_MAX_AGE_HOURS, metavar="N")
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--live-fallback", action="store_true",
@@ -283,6 +288,7 @@ def main() -> None:
         ollama_client.OLLAMA_MODEL = args.model
     if args.judge_model:
         set_judge_model(args.judge_model)
+    set_judge_enabled(args.judge)
     if args.prices_file:
         price_lookup.set_prices_path(Path(args.prices_file))
     CONFIG["max_age_hours"] = args.max_age_hours

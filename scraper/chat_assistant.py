@@ -56,6 +56,17 @@ JUDGE_MODEL = "llama3.1"
 
 _URL_RE = re.compile(r"https?://\S+")
 
+# The judge can be switched off (web_app's default, --judge turns it on): on a slow,
+# shared GPU it timed out on every request, so it only added a minute of waiting
+# before falling back to the best-ranked candidate anyway.
+JUDGE_ENABLED = True
+
+
+def set_judge_enabled(enabled: bool) -> None:
+    global JUDGE_ENABLED
+    JUDGE_ENABLED = enabled
+
+
 def set_judge_model(name: str) -> None:
     """Choose the judge model at startup (web_app --judge-model), e.g. the chat model."""
     global JUDGE_MODEL
@@ -527,7 +538,12 @@ def _price_from_saved(items: list[str], max_age_hours: int, context: str = "") -
         })
 
     judge_failed = False
-    if any(item_candidate_names[item] for item in items):
+    if not JUDGE_ENABLED:
+        # Candidates are ranked best-first, so index 0 is what the judge's own
+        # fallback would use. No retry pass either: there was no judge to second-guess.
+        picks = [0 if item_candidate_names[item] else None for item in items]
+        judge_failed = True
+    elif any(item_candidate_names[item] for item in items):
         try:
             picks = product_matcher.pick_best_matches(
                 context or "a grocery shopping list", items, batch, model=JUDGE_MODEL,

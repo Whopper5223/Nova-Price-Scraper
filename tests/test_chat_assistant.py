@@ -7,7 +7,7 @@ from unittest.mock import patch
 from scraper import ollama_client, price_lookup
 from scraper.chat_assistant import (
     JUDGE_MODEL, SUMMARY_SYSTEM_PROMPT, _extract_list, _parse_budget, _plain_summary, _price_from_saved,
-    _store_basket_totals, judge_model_warning, set_judge_model,
+    _store_basket_totals, judge_model_warning, set_judge_enabled, set_judge_model,
 )
 from scraper.ollama_client import OllamaError
 
@@ -1026,6 +1026,31 @@ class TestPriceFromSavedShowsEveryStoresClosestMatch(unittest.TestCase):
 
         self.assertEqual(len(totals), 3)
         self.assertTrue(all(t["covers_all_items"] for t in totals))
+
+
+class TestPriceFromSavedWithTheJudgeTurnedOff(unittest.TestCase):
+    """On a slow server the judge timed out on every request anyway. With it switched
+    off there is no model call and the best-ranked candidate is used directly."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        fixture_path = Path(self._tmpdir.name) / "prices.json"
+        fixture_path.write_text(json.dumps(_crowded_cheese_fixture()))
+        price_lookup.set_prices_path(fixture_path)
+        set_judge_enabled(False)
+
+    def tearDown(self):
+        set_judge_enabled(True)
+        price_lookup.set_prices_path(None)
+        self._tmpdir.cleanup()
+
+    @patch("scraper.chat_assistant.product_matcher.pick_best_matches")
+    def test_no_judge_call_and_the_top_ranked_product_is_used(self, mock_pick):
+        findings, unresolved = _price_from_saved(["cheese"], max_age_hours=999999)
+
+        mock_pick.assert_not_called()
+        self.assertEqual(unresolved, [])
+        self.assertEqual(findings["cheese"][0]["name"], "Mild Swiss Cheese")
 
 
 class TestPriceFromSavedSurvivesAFailingJudge(unittest.TestCase):

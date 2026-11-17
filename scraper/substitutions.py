@@ -16,8 +16,9 @@ import json
 from scraper import ollama_client
 from scraper.ollama_client import OllamaError
 
-# Like the product judge, a stuck call must not hold a pricing request for minutes.
-SUBSTITUTES_TIMEOUT_SECONDS = 60
+# It only runs for ingredients we found nothing for, so it can afford to wait: on the
+# shared GPU (27B model mostly on CPU) 60s timed out every time.
+SUBSTITUTES_TIMEOUT_SECONDS = 180
 MAX_OPTIONS = 2
 
 SUBSTITUTES_SYSTEM_PROMPT = """You help price a recipe's grocery list. For each ingredient below that has no price, name up to 2 grocery-store items that could REALLY replace it in this dish at about the same quantity without changing what the dish is: one cooking oil for another, scallions for green onions, bread flour for all-purpose flour.

@@ -71,6 +71,11 @@ class TestProposeSubstitutes(unittest.TestCase):
         self.assertIn("pad thai for two", last_turn)
         self.assertEqual(mock_json.call_args.kwargs["model"], "qwen3.8:27b")
 
+    def test_the_call_gets_a_long_enough_limit_for_a_slow_shared_gpu(self):
+        _out, mock_json = _ask(["a"], {"substitutes": []})
+
+        self.assertGreaterEqual(mock_json.call_args.kwargs["timeout"], 180)
+
     def test_there_is_one_call_for_the_whole_batch(self):
         _out, mock_json = _ask(["a", "b", "c"], {"substitutes": []})
 
