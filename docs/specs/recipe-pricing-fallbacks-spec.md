@@ -1,5 +1,7 @@
 # Spec: Recipe pricing fallbacks (substitute, Instacart price) with a visible source
 
+Revision 2026-11-17: order is database -> Instacart price -> substitute (substitute only when the
+ingredient has no listing at all), so foods like eggs cost no extra model call.
 Status: Slice 1 (source labels + Instacart-price fallback) and Slice 2 (substitution) built 2026-11-16;
 live verification on the server pending.
 Intent: confirmed in conversation, 2026-11-16 (interview). Extends the chat

@@ -441,15 +441,15 @@ JUDGE_CANDIDATES_PER_ITEM = 8
 
 def _add_substitutes(items: list[str], findings: dict, unresolved: list[str], context: str) -> None:
     """
-    For each ingredient with no price in our database at ANY store (no row is a
-    "database" price: unlisted, or only Instacart prices), ask the model for an
-    interchangeable item and, if one has a database price, price that instead. It is
-    decided per ingredient so every store prices the same substitute; the result is
-    keyed under the ingredient the recipe asked for, every row labelled "substitute".
-    One batched model call, and none at all when every ingredient already has a database
-    price. Mutates `findings` and `unresolved`.
+    Last step of the fallback order: database price, then the Instacart price, then --
+    only for an ingredient we found nothing for at all -- a substitute. The model is
+    asked for interchangeable items (one oil for another); a proposal is used only if it
+    has a real database price at some store. Decided per ingredient so every store prices
+    the same substitute; the result stays keyed under the ingredient asked for, every row
+    labelled "substitute". One batched call, and none when everything was found.
+    Mutates `findings` and `unresolved`.
     """
-    needy = [i for i in items if not any(r.get("price_source") == "database" for r in findings.get(i, []))]
+    needy = [i for i in items if i not in findings]
     if not needy:
         return
     proposals = substitutions.propose_substitutes(needy, context or "a grocery shopping list", model=JUDGE_MODEL)

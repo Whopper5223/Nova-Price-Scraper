@@ -289,20 +289,21 @@ class TestPriceFromSavedSubstitution(unittest.TestCase):
         self.assertEqual(findings, {})
         self.assertEqual(unresolved, ["saffron"])
 
-    def test_an_instacart_only_food_with_no_stand_in_keeps_its_instacart_price(self):
-        findings, unresolved, _ = self._price(["eggs"], {})
+    def test_an_instacart_only_food_keeps_its_instacart_price_with_no_model_call(self):
+        findings, unresolved, mock_sub = self._price(["eggs"], {})
+        mock_sub.assert_not_called()
 
         self.assertEqual(unresolved, [])
         self.assertEqual(findings["eggs"][0]["price_source"], "instacart")
         self.assertEqual(findings["eggs"][0]["name"], "Large Eggs")
 
-    def test_a_substitute_replaces_an_instacart_only_food_when_the_model_proposes_one(self):
-        # The confirmed order is database -> substitute -> Instacart price, so a
-        # proposal for an Instacart-only food is honoured; the prompt is what keeps
-        # the model from proposing one for eggs.
-        findings, _, _ = self._price(["eggs"], {"eggs": ["canola oil"]})
+    def test_an_instacart_listed_food_keeps_its_instacart_price_even_if_a_stand_in_exists(self):
+        # Order: database price, then the Instacart price, and only if the food is not
+        # on Instacart at all, a substitute. Eggs never trigger a model call.
+        findings, _, mock_sub = self._price(["eggs"], {"eggs": ["canola oil"]})
 
-        self.assertEqual(findings["eggs"][0]["price_source"], "substitute")
+        self.assertEqual(findings["eggs"][0]["price_source"], "instacart")
+        mock_sub.assert_not_called()
 
     def test_a_substitute_with_no_database_price_at_any_store_is_rejected(self):
         findings, unresolved, _ = self._price(["grapeseed oil"], {"grapeseed oil": ["large eggs"]})
@@ -321,12 +322,11 @@ class TestPriceFromSavedSubstitution(unittest.TestCase):
         mock_sub.assert_not_called()
         self.assertEqual(findings["canola oil"][0]["price_source"], "database")
 
-    def test_one_batched_call_covers_every_ingredient_that_needs_a_substitute(self):
-        _findings, _unresolved, mock_sub = self._price(["grapeseed oil", "eggs", "canola oil"], {})
+    def test_one_batched_call_covers_only_the_ingredients_with_no_listing(self):
+        _f, _u, mock_sub = self._price(["grapeseed oil", "saffron", "eggs", "canola oil"], {})
 
         self.assertEqual(mock_sub.call_count, 1)
-        asked = mock_sub.call_args[0][0]
-        self.assertEqual(sorted(asked), ["eggs", "grapeseed oil"])
+        self.assertEqual(sorted(mock_sub.call_args[0][0]), ["grapeseed oil", "saffron"])
 
 
 class TestStoreTotalsCountSubstitutes(unittest.TestCase):
